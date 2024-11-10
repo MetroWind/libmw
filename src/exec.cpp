@@ -2,6 +2,7 @@
 #include <format>
 #include <expected>
 #include <utility>
+#include <ranges>
 
 #include <errno.h>
 #include <stdio.h>
@@ -157,103 +158,6 @@ E<void> Pipe::write(std::string_view data) const
         offset += written;
     }
     return {};
-}
-
-E<Process> Process::exec(
-    const Input input, std::initializer_list<const char*> args,
-    const Output output)
-{
-    Process proc;
-    Pipe input_pipe;
-    proc.output = output;
-    if(std::holds_alternative<std::string_view>(input))
-    {
-        ASSIGN_OR_RETURN(input_pipe, Pipe::create());
-    }
-    if(std::holds_alternative<std::string*>(output))
-    {
-        ASSIGN_OR_RETURN(proc.managed_output_pipe, Pipe::create());
-    }
-
-    ASSIGN_OR_RETURN(proc.comm, Pipe::create());
-
-    pid_t pid = fork(); // create child process that is a clone of the parent
-    if(pid == 0)       // if pid == 0, then this is the child process
-    {
-        if(std::holds_alternative<Pipe*>(input))
-        {
-            Pipe* input_pipe = std::get<Pipe*>(input);
-            DO_OR_RETURN(input_pipe->dupOutput(STDIN_FILENO));
-            DO_OR_RETURN(input_pipe->closeOutput());
-            DO_OR_RETURN(input_pipe->closeInput());
-        }
-        else if(std::holds_alternative<std::string_view>(input))
-        {
-            DO_OR_RETURN(input_pipe.dupOutput(STDIN_FILENO));
-            DO_OR_RETURN(input_pipe.closeOutput());
-            DO_OR_RETURN(input_pipe.closeInput());
-        }
-
-        if(std::holds_alternative<Pipe*>(output))
-        {
-            Pipe* output_pipe = std::get<Pipe*>(output);
-            DO_OR_RETURN(output_pipe->dupInput(STDOUT_FILENO));
-            // file descriptor no longer needed in child since stdin is a copy.
-            DO_OR_RETURN(output_pipe->closeInput());
-            // file descriptor unused in child.
-            DO_OR_RETURN(output_pipe->closeOutput());
-        }
-        else if(std::holds_alternative<std::string*>(output))
-        {
-            DO_OR_RETURN(proc.managed_output_pipe.dupInput(STDOUT_FILENO));
-            // file descriptor no longer needed in child since stdin is a copy.
-            DO_OR_RETURN(proc.managed_output_pipe.closeInput());
-            // file descriptor unused in child.
-            DO_OR_RETURN(proc.managed_output_pipe.closeOutput());
-        }
-
-        DO_OR_RETURN(proc.comm.closeOutput());
-
-        std::vector<char*> argv(args.size() + 1, nullptr);
-        auto args_array = std::data(args);
-        for(size_t i = 0; i < args.size(); i++)
-        {
-            argv[i] = const_cast<char*>(args_array[i]);
-        }
-        argv.push_back(nullptr);
-        if(execvp(argv[0], reinterpret_cast<char* const*>(argv.data())) < 0)
-        {
-            proc.comm.write("FAIL");
-            proc.comm.closeInput();
-            exit(1);
-        }
-        std::unreachable();
-    }
-
-    // if we reach here, we are in parent process
-    if(std::holds_alternative<Pipe*>(input))
-    {
-        DO_OR_RETURN(std::get<Pipe*>(input)->closeOutput());
-    }
-    else if(std::holds_alternative<std::string_view>(input))
-    {
-        input_pipe.closeOutput();
-        input_pipe.write(std::get<std::string_view>(input));
-        input_pipe.closeInput();
-    }
-
-    if(std::holds_alternative<Pipe*>(output))
-    {
-        DO_OR_RETURN(std::get<Pipe*>(output)->closeInput());
-    }
-    else if(std::holds_alternative<std::string*>(output))
-    {
-        DO_OR_RETURN(proc.managed_output_pipe.closeInput());
-    }
-
-    DO_OR_RETURN(proc.comm.closeInput());
-    proc.pid = pid;
-    return E<Process>{std::in_place, std::move(proc)};
 }
 
 Process::Process(Process&& rhs) :

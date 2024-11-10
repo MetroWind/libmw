@@ -61,4 +61,11 @@ TEST(Exec, WillFailWithInvalidCmd)
     EXPECT_FALSE(isExpected(proc.wait()));
 }
 
+TEST(Exec, CanUseContainerAsArgs)
+{
+    std::array<const char*, 2> args = {"true", "1"};
+    ASSIGN_OR_FAIL(auto proc, Process::exec(nullptr, args, nullptr));
+    EXPECT_TRUE(isExpected(proc.wait()));
+}
+
 } // namespace mw
