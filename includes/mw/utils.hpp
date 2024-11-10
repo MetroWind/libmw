@@ -9,8 +9,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
-#include <nlohmann/json.hpp>
 #include <curl/curl.h>
 
 #include "error.hpp"
@@ -37,12 +37,6 @@
 
 using Clock = std::chrono::system_clock;
 using Time = std::chrono::time_point<Clock>;
-
-template <typename Bytes>
-nlohmann::json parseJSON(Bytes&& bs)
-{
-    return nlohmann::json::parse(bs, nullptr, false);
-}
 
 inline std::string urlEncode(std::string_view s)
 {
