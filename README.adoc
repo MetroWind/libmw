@@ -28,3 +28,8 @@ int main()
     return 0;
 }
 ----
+
+If you use features that requires cURL, add `find_package(CURL
+REQUIRED)` to your CMakelists, and link to `${CURL_LIBRARIES}`. If you
+use features that requires SQLite3, add `find_package(SQLite3
+REQUIRED)` to your CMakelists, and link to `${SQLite3_LIBRARIES}`.
