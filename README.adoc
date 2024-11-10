@@ -1,0 +1,30 @@
+= Libmw
+
+== Usage
+
+[source]
+----
+include(FetchContent)
+FetchContent_Declare(
+  libmw
+  GIT_REPOSITORY https://github.com/MetroWind/libmw.git
+)
+FetchContent_MakeAvailable(libmw)
+add_executable(some_executable main.cpp)
+target_include_directories(some_executable PRIVATE ${libmw_SOURCE_DIR}/includes)
+----
+
+In `main.cpp`,
+
+[source,c++]
+----
+#include <iostream>
+#include <mw/utils.hpp>
+
+int main()
+{
+    // Prints “aaa bbb”.
+    std::cout << strip("   aaa bbb ") << std::endl;
+    return 0;
+}
+----
