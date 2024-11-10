@@ -2,23 +2,30 @@
 cmake_minimum_required(VERSION 3.24)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
-
 project(libmw)
 
+option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
+
 include(FetchContent)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
-)
 
-# For unit tests
-FetchContent_Declare(
-  httplib
-  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-  GIT_TAG v0.18.0
-)
+if(LIBMW_BUILD_TESTS)
+  message("Will build libmw tests.")
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+  )
+  FetchContent_MakeAvailable(googletest)
 
-FetchContent_MakeAvailable(googletest httplib)
+  # For unit tests
+  FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.18.0
+  )
+  FetchContent_MakeAvailable(httplib)
+else()
+  message("Not building libmw tests.")
+endif()
 
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
@@ -60,34 +67,36 @@ target_compile_options(mw PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(mw PRIVATE ${INCLUDES})
 target_link_libraries(mw PRIVATE ${LIBS})
 
-set(TEST_FILES
-  src/database_test.cpp
-  src/exec_test.cpp
-  src/http_client_test.cpp
-  src/url_test.cpp
-  src/utils_test.cpp
-)
+if(LIBMW_BUILD_TESTS)
+  set(TEST_FILES
+    src/database_test.cpp
+    src/exec_test.cpp
+    src/http_client_test.cpp
+    src/url_test.cpp
+    src/utils_test.cpp
+  )
 
-# ctest --test-dir build
-add_executable(mw_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
-set_property(TARGET mw_test PROPERTY CXX_STANDARD 23)
-set_property(TARGET mw_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
-target_compile_options(mw_test PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(mw_test PRIVATE
-  ${INCLUDES}
-  ${googletest_SOURCE_DIR}/googletest/include
-  ${googletest_SOURCE_DIR}/googlemock/include
-)
+  # ctest --test-dir build
+  add_executable(mw_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
+  set_property(TARGET mw_test PROPERTY CXX_STANDARD 23)
+  set_property(TARGET mw_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
+  target_compile_options(mw_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_include_directories(mw_test PRIVATE
+    ${INCLUDES}
+    ${googletest_SOURCE_DIR}/googletest/include
+    ${googletest_SOURCE_DIR}/googlemock/include
+  )
 
-target_link_libraries(mw_test PRIVATE
-  ${LIBS}
-  httplib
-  GTest::gtest_main
-  GTest::gmock_main
-)
+  target_link_libraries(mw_test PRIVATE
+    ${LIBS}
+    httplib
+    GTest::gtest_main
+    GTest::gmock_main
+  )
 
-enable_testing()
-include(GoogleTest)
-gtest_discover_tests(mw_test
-  # Need this so that the unit tests can find the templates.
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  enable_testing()
+  include(GoogleTest)
+  gtest_discover_tests(mw_test
+    # Need this so that the unit tests can find the templates.
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
