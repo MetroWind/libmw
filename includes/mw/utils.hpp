@@ -35,6 +35,9 @@
         return std::unexpected(std::move(rt).error());  \
     }
 
+namespace mw
+{
+
 using Clock = std::chrono::system_clock;
 using Time = std::chrono::time_point<Clock>;
 
@@ -182,3 +185,5 @@ inline std::string escapeHTML(std::string_view s)
     }
     return buffer;
 }
+
+} // namespace mw

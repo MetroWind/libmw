@@ -7,6 +7,9 @@
 #include "http_client.hpp"
 #include "error.hpp"
 
+namespace mw
+{
+
 class HTTPSessionMock : public HTTPSessionInterface
 {
 public:
@@ -16,3 +19,5 @@ public:
     MOCK_METHOD(E<const HTTPResponse*>, post, (const HTTPRequest& req),
                 (override));
 };
+
+} // namespace mw

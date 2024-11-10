@@ -11,6 +11,9 @@
 
 #include "error.hpp"
 
+namespace mw
+{
+
 struct HTTPRequest
 {
     std::string url;
@@ -84,3 +87,5 @@ private:
     static size_t writeHeaders(char *buffer, size_t size, size_t nitems,
                                void *userdata);
 };
+
+} // namespace mw

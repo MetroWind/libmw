@@ -14,6 +14,9 @@
 #define ASSIGN_OR_FAIL(var, val)                                      \
     _ASSIGN_OR_FAIL_INNER(_CONCAT_NAMES(assign_or_return_tmp, __COUNTER__), var, val)
 
+namespace mw
+{
+
 // Usage: ASSERT_TRUE(isExpected(functionThatReturnsExpected()));
 template<typename T>
 testing::AssertionResult isExpected(const E<T>& result)
@@ -23,3 +26,5 @@ testing::AssertionResult isExpected(const E<T>& result)
     else
         return testing::AssertionFailure() << errorMsg(result.error());
 }
+
+} // namespace mw

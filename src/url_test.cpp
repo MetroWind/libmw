@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+namespace mw
+{
+
 TEST(URL, CanGetSetParts)
 {
     auto url = URL::fromStr("http://example.com:1234/aaa/bbb");
@@ -29,3 +32,5 @@ TEST(URL, CanAppendPath)
         EXPECT_EQ(url->str(), "http://example.com/bbb");
     }
 }
+
+} // namespace mw

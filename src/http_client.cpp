@@ -12,6 +12,9 @@
 
 #include "http_client.hpp"
 
+namespace mw
+{
+
 HTTPRequest& HTTPRequest::setPayload(std::string_view data)
 {
     request_data = data;
@@ -189,3 +192,5 @@ size_t HTTPSession::writeHeaders(char *buffer, [[maybe_unused]] size_t size,
 
     return nitems;
 }
+
+} // namespace mw

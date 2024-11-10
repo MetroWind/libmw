@@ -5,6 +5,9 @@
 #include "utils.hpp"
 #include "test_utils.hpp"
 
+namespace mw
+{
+
 TEST(Exec, CanPipeWithPipes)
 {
     ASSIGN_OR_FAIL(Pipe input, Pipe::create());
@@ -57,3 +60,5 @@ TEST(Exec, WillFailWithInvalidCmd)
                    Process::exec(&input, {"fjdkal",}, &output_pipe));
     EXPECT_FALSE(isExpected(proc.wait()));
 }
+
+} // namespace mw

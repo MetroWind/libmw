@@ -5,6 +5,8 @@
 #include "utils.hpp"
 #include "test_utils.hpp"
 
+using namespace mw;
+
 TEST(Database, CanEvaluateAndExecute)
 {
     ASSIGN_OR_FAIL(auto db, SQLite::connectMemory());

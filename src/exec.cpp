@@ -15,6 +15,9 @@
 #include "exec.hpp"
 #include "utils.hpp"
 
+namespace mw
+{
+
 Pipe::Pipe(Pipe&& rhs)
 {
     std::swap(fds, rhs.fds);
@@ -325,3 +328,5 @@ E<int> Process::wait()
     }
     std::unreachable();
 }
+
+} // namespace mw

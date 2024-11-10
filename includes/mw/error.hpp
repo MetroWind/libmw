@@ -5,6 +5,9 @@
 #include <string_view>
 #include <variant>
 
+namespace mw
+{
+
 struct RuntimeError
 {
     std::string msg;
@@ -42,3 +45,5 @@ inline const std::string& errorMsg(const Error& e)
         return err.msg;
     }, e);
 }
+
+} // namespace mw

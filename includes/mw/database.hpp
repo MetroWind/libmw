@@ -15,6 +15,9 @@
 #include "error.hpp"
 #include "utils.hpp"
 
+namespace mw
+{
+
 // A simple RAII wrapper of sqlite3_stmt*.
 class SQLiteStatement
 {
@@ -301,3 +304,5 @@ E<T> SQLite::evalToValue(const char* sql_code) const
     ASSIGN_OR_RETURN(auto sql, SQLiteStatement::fromStr(db, sql_code));
     return evalToValue<T>(std::move(sql));
 }
+
+} // namespace mw

@@ -11,6 +11,9 @@
 #include "error.hpp"
 #include "utils.hpp"
 
+namespace mw
+{
+
 SQLiteStatement::SQLiteStatement(SQLiteStatement&& rhs)
 {
     std::swap(sql, rhs.sql);
@@ -112,3 +115,5 @@ int64_t SQLite::changedRowsCount() const
 {
     return sqlite3_changes64(db);
 }
+
+} // namespace mw

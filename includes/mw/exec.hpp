@@ -10,6 +10,9 @@
 
 #include "error.hpp"
 
+namespace mw
+{
+
 // A thin wrapper around the POSIX pipe utilities. Here “input” means
 // the end which data flows into the pipe, and “output” means the end
 // which data flows out of the pipe.
@@ -88,3 +91,5 @@ private:
     // to the string.
     Pipe managed_output_pipe;
 };
+
+} // namespace mw

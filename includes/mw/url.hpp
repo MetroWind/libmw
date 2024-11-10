@@ -8,6 +8,9 @@
 #include "utils.hpp"
 #include "error.hpp"
 
+namespace mw
+{
+
 class URL
 {
 public:
@@ -59,3 +62,5 @@ private:
     void init();
     CURLU* url;
 };
+
+} // namespace mw

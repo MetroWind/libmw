@@ -9,6 +9,9 @@
 #include "error.hpp"
 #include "http_client.hpp"
 
+namespace mw
+{
+
 class CurlEnv : public ::testing::Environment
 {
 public:
@@ -127,3 +130,5 @@ TEST(HTTPSession, CanPost)
     server.stop();
     t.join();
 }
+
+} // namespace mw

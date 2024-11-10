@@ -4,6 +4,9 @@
 
 #include "utils.hpp"
 
+namespace mw
+{
+
 TEST(Utils, CanStripStringFromLeft)
 {
     EXPECT_EQ(lstrip(""), "");
@@ -33,3 +36,5 @@ TEST(Utils, CanStripStringFromBothSides)
     EXPECT_EQ(strip(" a  "), "a");
     EXPECT_EQ(strip("a"), "a");
 }
+
+} // namespace mw

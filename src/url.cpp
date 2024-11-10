@@ -7,6 +7,9 @@
 #include "error.hpp"
 #include "url.hpp"
 
+namespace mw
+{
+
 E<URL> URL::fromStr(const char* u)
 {
     URL url;
@@ -316,3 +319,5 @@ std::string URL::decode(std::string_view s)
     curl_free(r);
     return result;
 }
+
+} // namespace mw
