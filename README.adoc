@@ -12,6 +12,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(libmw)
 add_executable(some_executable main.cpp)
 target_include_directories(some_executable PRIVATE ${libmw_SOURCE_DIR}/includes)
+target_link_libraries(some_executable PRIVATE mw)
 ----
 
 In `main.cpp`,
