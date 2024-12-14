@@ -6,6 +6,7 @@ project(libmw)
 
 option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
 option(LIBMW_BUILD_URL "Build mw::url" OFF)
+option(LIBMW_BUILD_SQLITE "Build mw::sqlite" OFF)
 
 include(FetchContent)
 
@@ -28,16 +29,12 @@ else()
   message("Not building libmw tests.")
 endif()
 
-find_package(SQLite3 REQUIRED)
-
 set(SOURCE_FILES
-  src/database.cpp
   src/exec.cpp
   src/http_client.cpp
 )
 
 set(HEADERS
-  includes/mw/database.hpp
   includes/mw/error.hpp
   includes/mw/exec.hpp
   includes/mw/http_client.hpp
@@ -47,11 +44,9 @@ set(HEADERS
 )
 
 set(LIBS
-  ${SQLite3_LIBRARIES}
 )
 
 set(INCLUDES
-  ${SQLite3_INCLUDE_DIRS}
   includes/mw
 )
 
@@ -65,7 +60,6 @@ target_link_libraries(mw PRIVATE ${LIBS})
 
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
-    src/database_test.cpp
     src/exec_test.cpp
     src/http_client_test.cpp
     src/utils_test.cpp
@@ -101,4 +95,9 @@ add_library(mw::mw ALIAS mw)
 if(LIBMW_BUILD_URL)
   add_subdirectory(url)
   add_library(mw::url ALIAS mw-url)
+endif()
+
+if(LIBMW_BUILD_SQLITE)
+  add_subdirectory(sqlite)
+  add_library(mw::sqlite ALIAS mw-sqlite)
 endif()
