@@ -1,11 +1,9 @@
-# cmake -B build . && cmake --build build -j
 cmake_minimum_required(VERSION 3.24)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(libmw)
 
 option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
-option(LIBMW_BUILD_URL "Build mw::url" OFF)
 
 include(FetchContent)
 
@@ -28,47 +26,36 @@ else()
   message("Not building libmw tests.")
 endif()
 
-find_package(SQLite3 REQUIRED)
+find_package(CURL REQUIRED)
 
 set(SOURCE_FILES
-  src/database.cpp
-  src/exec.cpp
-  src/http_client.cpp
+  src/url.cpp
 )
 
 set(HEADERS
-  includes/mw/database.hpp
-  includes/mw/error.hpp
-  includes/mw/exec.hpp
-  includes/mw/http_client.hpp
-  includes/mw/http_client_mock.hpp
-  includes/mw/test_utils.hpp
-  includes/mw/utils.hpp
+  ../includes/mw/url.hpp
 )
 
 set(LIBS
-  ${SQLite3_LIBRARIES}
+  ${CURL_LIBRARIES}
 )
 
 set(INCLUDES
-  ${SQLite3_INCLUDE_DIRS}
-  includes/mw
+  ${CURL_INCLUDE_DIR}
+  ../includes/mw
 )
 
-add_library(mw STATIC ${HEADERS} ${SOURCE_FILES})
+add_library(mw-url STATIC ${HEADERS} ${SOURCE_FILES})
 # set_target_properties(mw PROPERTIES PUBLIC_HEADER ${HEADERS})
-set_property(TARGET mw PROPERTY CXX_STANDARD 23)
-set_property(TARGET mw PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
-target_compile_options(mw PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(mw PRIVATE ${INCLUDES})
-target_link_libraries(mw PRIVATE ${LIBS})
+set_property(TARGET mw-url PROPERTY CXX_STANDARD 23)
+set_property(TARGET mw-url PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
+target_compile_options(mw-url PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(mw-url PRIVATE ${INCLUDES})
+target_link_libraries(mw-url PRIVATE ${LIBS})
 
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
-    src/database_test.cpp
-    src/exec_test.cpp
-    src/http_client_test.cpp
-    src/utils_test.cpp
+    src/url_test.cpp
   )
 
   # ctest --test-dir build
@@ -94,11 +81,4 @@ if(LIBMW_BUILD_TESTS)
   gtest_discover_tests(mw_test
     # Need this so that the unit tests can find the templates.
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-endif()
-
-add_library(mw::mw ALIAS mw)
-
-if(LIBMW_BUILD_URL)
-  add_subdirectory(url)
-  add_library(mw::url ALIAS mw-url)
 endif()
