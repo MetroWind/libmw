@@ -59,17 +59,17 @@ if(LIBMW_BUILD_TESTS)
   )
 
   # ctest --test-dir build
-  add_executable(mw_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
-  set_property(TARGET mw_test PROPERTY CXX_STANDARD 23)
-  set_property(TARGET mw_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
-  target_compile_options(mw_test PRIVATE -Wall -Wextra -Wpedantic)
-  target_include_directories(mw_test PRIVATE
+  add_executable(mw-url_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
+  set_property(TARGET mw-url_test PROPERTY CXX_STANDARD 23)
+  set_property(TARGET mw-url_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
+  target_compile_options(mw-url_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_include_directories(mw-url_test PRIVATE
     ${INCLUDES}
     ${googletest_SOURCE_DIR}/googletest/include
     ${googletest_SOURCE_DIR}/googlemock/include
   )
 
-  target_link_libraries(mw_test PRIVATE
+  target_link_libraries(mw-url_test PRIVATE
     ${LIBS}
     httplib
     GTest::gtest_main
@@ -78,7 +78,7 @@ if(LIBMW_BUILD_TESTS)
 
   enable_testing()
   include(GoogleTest)
-  gtest_discover_tests(mw_test
+  gtest_discover_tests(mw-url_test
     # Need this so that the unit tests can find the templates.
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
