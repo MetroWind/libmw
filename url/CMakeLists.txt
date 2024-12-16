@@ -30,10 +30,12 @@ find_package(CURL REQUIRED)
 
 set(SOURCE_FILES
   src/url.cpp
+  src/http_client.cpp
 )
 
 set(HEADERS
   ../includes/mw/url.hpp
+  ../includes/mw/http_client.hpp
 )
 
 set(LIBS
@@ -56,6 +58,7 @@ target_link_libraries(mw-url PRIVATE ${LIBS})
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
     src/url_test.cpp
+    src/http_client_test.cpp
   )
 
   # ctest --test-dir build

@@ -31,14 +31,11 @@ endif()
 
 set(SOURCE_FILES
   src/exec.cpp
-  src/http_client.cpp
 )
 
 set(HEADERS
   includes/mw/error.hpp
   includes/mw/exec.hpp
-  includes/mw/http_client.hpp
-  includes/mw/http_client_mock.hpp
   includes/mw/test_utils.hpp
   includes/mw/utils.hpp
 )
@@ -61,7 +58,6 @@ target_link_libraries(mw PRIVATE ${LIBS})
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
     src/exec_test.cpp
-    src/http_client_test.cpp
     src/utils_test.cpp
   )
 
