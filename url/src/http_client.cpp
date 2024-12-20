@@ -93,6 +93,18 @@ curl_slist* headersFromReq(const HTTPRequest& req)
     return headers;
 }
 
+E<void> HTTPSession::useUnixSocket(const char* path)
+{
+    if(curl_easy_setopt(handle, CURLOPT_UNIX_SOCKET_PATH, path) != CURLE_OK)
+    {
+        return std::unexpected(runtimeError("Using UNIX socket is not supported"));
+    }
+    else
+    {
+        return {};
+    }
+}
+
 E<const HTTPResponse*> HTTPSession::get(const HTTPRequest& req)
 {
     prepareForNewRequest();

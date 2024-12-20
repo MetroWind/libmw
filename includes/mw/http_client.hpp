@@ -44,6 +44,7 @@ class HTTPSessionInterface
 {
 public:
     virtual ~HTTPSessionInterface() = default;
+    virtual E<void> useUnixSocket(const char* path) = 0;
     E<const HTTPResponse*> get(const std::string& uri)
     {
         return this->get(HTTPRequest(uri));
@@ -70,6 +71,8 @@ public:
     ~HTTPSession() override;
     HTTPSession(const HTTPSession&);
     HTTPSession& operator=(const HTTPSession&) = delete;
+
+    E<void> useUnixSocket(const char* path) override;
 
     using HTTPSessionInterface::get;
     // The returned pointer is garenteed to be non-null.
