@@ -7,6 +7,7 @@ project(libmw)
 option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
 option(LIBMW_BUILD_URL "Build mw::url" OFF)
 option(LIBMW_BUILD_SQLITE "Build mw::sqlite" OFF)
+option(LIBMW_BUILD_HTTP_SERVER "Build mw::http-server" OFF)
 
 include(FetchContent)
 
@@ -55,6 +56,23 @@ target_compile_options(mw PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(mw PRIVATE ${INCLUDES})
 target_link_libraries(mw PRIVATE ${LIBS})
 
+add_library(mw::mw ALIAS mw)
+
+if(LIBMW_BUILD_URL)
+  add_subdirectory(url)
+  add_library(mw::url ALIAS mw-url)
+endif()
+
+if(LIBMW_BUILD_SQLITE)
+  add_subdirectory(sqlite)
+  add_library(mw::sqlite ALIAS mw-sqlite)
+endif()
+
+if(LIBMW_BUILD_HTTP_SERVER)
+  add_subdirectory(http-server)
+  add_library(mw::http-server ALIAS mw-http-server)
+endif()
+
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
     src/exec_test.cpp
@@ -84,16 +102,4 @@ if(LIBMW_BUILD_TESTS)
   gtest_discover_tests(mw_test
     # Need this so that the unit tests can find the templates.
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-endif()
-
-add_library(mw::mw ALIAS mw)
-
-if(LIBMW_BUILD_URL)
-  add_subdirectory(url)
-  add_library(mw::url ALIAS mw-url)
-endif()
-
-if(LIBMW_BUILD_SQLITE)
-  add_subdirectory(sqlite)
-  add_library(mw::sqlite ALIAS mw-sqlite)
 endif()
