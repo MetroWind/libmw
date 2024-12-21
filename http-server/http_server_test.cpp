@@ -1,8 +1,9 @@
-#include <filesystem>
 
 #include <gtest/gtest.h>
 
 #include <mw/http_server.hpp>
+#include <mw/http_client.hpp>
+#include <mw/test_utils.hpp>
 
 namespace mw
 {
@@ -12,10 +13,9 @@ class Server : public HTTPServer
 public:
     using HTTPServer::HTTPServer;
 protected:
-    void setup()
+    void setup() override
     {
-        server.Get("/", [&]([[maybe_unused]] const httplib::Request& req,
-                            httplib::Response& res)
+        server.Get("/", [&]([[maybe_unused]] const Request& _, Response& res)
         {
             res.status = 200;
             res.set_content("index", "text/plain");
@@ -23,16 +23,32 @@ protected:
     }
 };
 
-TEST(HTTPServer, CanStartServer)
+TEST(HTTPServer, CanStartServerOnSocket)
 {
     Server server("/tmp/mwtest.socket");
     server.start();
-
-    // TODO: use HTTPSession to get /.
-
+    {
+        HTTPSession client("/tmp/mwtest.socket");
+        ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost/"));
+        EXPECT_EQ(res->status, 200);
+        EXPECT_EQ(res->payloadAsStr(), "index");
+    }
     server.stop();
     server.wait();
-    std::filesystem::remove("/tmp/mwtest.socket");
+}
+
+TEST(HTTPServer, CanStartServer)
+{
+    Server server("localhost", 8123);
+    server.start();
+    {
+        HTTPSession client;
+        ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost:8123/"));
+        EXPECT_EQ(res->status, 200);
+        EXPECT_EQ(res->payloadAsStr(), "index");
+    }
+    server.stop();
+    server.wait();
 }
 
 } // namespace mw

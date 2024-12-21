@@ -2,6 +2,7 @@
 #include <string>
 #include <tuple>
 #include <expected>
+#include <filesystem>
 
 #include <httplib.h>
 #include <spdlog/spdlog.h>
@@ -15,17 +16,28 @@ namespace mw
 HTTPServer::HTTPServer(const std::string& socket_file)
 {
     listen = socket_file;
-    this->setup();
 }
 
 HTTPServer::HTTPServer(const std::string& listen_address, int listen_port)
 {
     listen = std::make_tuple(listen_address, listen_port);
-    this->setup();
+}
+
+HTTPServer::~HTTPServer()
+{
+    if(std::holds_alternative<std::string>(listen))
+    {
+        const std::string& sock = std::get<std::string>(listen);
+        if(std::filesystem::exists(sock))
+        {
+            std::filesystem::remove(sock);
+        }
+    }
 }
 
 E<void> HTTPServer::start()
 {
+    this->setup();
     server_thread = std::thread([&] {
         try
         {
@@ -57,12 +69,17 @@ void HTTPServer::stop()
 {
     should_stop = true;
     server.stop();
+
 }
 
 void HTTPServer::wait()
 {
     while(!should_stop && server.is_running());
     server_thread.join();
+    if(std::holds_alternative<std::string>(listen))
+    {
+        std::filesystem::remove(std::get<std::string>(listen));
+    }
 }
 
 } // namespace mw

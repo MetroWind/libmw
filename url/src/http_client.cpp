@@ -58,6 +58,12 @@ HTTPSession::HTTPSession()
     res.payload.reserve(CURL_MAX_WRITE_SIZE);
 }
 
+HTTPSession::HTTPSession(std::string_view socket_path)
+        : HTTPSession()
+{
+    socket = socket_path;
+}
+
 HTTPSession::~HTTPSession()
 {
     if(handle != nullptr)
@@ -76,6 +82,11 @@ void HTTPSession::prepareForNewRequest()
 {
     res.clear();
     curl_easy_reset(handle);
+    if(socket.has_value())
+    {
+        curl_easy_setopt(handle, CURLOPT_UNIX_SOCKET_PATH, socket->c_str());
+    }
+
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, HTTPSession::writeResponse);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &res);
     curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, HTTPSession::writeHeaders);
@@ -91,18 +102,6 @@ curl_slist* headersFromReq(const HTTPRequest& req)
             headers, std::format("{}: {}", key, value).c_str());
     }
     return headers;
-}
-
-E<void> HTTPSession::useUnixSocket(const char* path)
-{
-    if(curl_easy_setopt(handle, CURLOPT_UNIX_SOCKET_PATH, path) != CURLE_OK)
-    {
-        return std::unexpected(runtimeError("Using UNIX socket is not supported"));
-    }
-    else
-    {
-        return {};
-    }
 }
 
 E<const HTTPResponse*> HTTPSession::get(const HTTPRequest& req)

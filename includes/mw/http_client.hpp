@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <span>
 #include <unordered_map>
+#include <optional>
 
 #include <curl/curl.h>
 
@@ -44,7 +45,6 @@ class HTTPSessionInterface
 {
 public:
     virtual ~HTTPSessionInterface() = default;
-    virtual E<void> useUnixSocket(const char* path) = 0;
     E<const HTTPResponse*> get(const std::string& uri)
     {
         return this->get(HTTPRequest(uri));
@@ -68,11 +68,10 @@ class HTTPSession : public virtual HTTPSessionInterface
 {
 public:
     HTTPSession();
+    explicit HTTPSession(std::string_view socket_path);
     ~HTTPSession() override;
     HTTPSession(const HTTPSession&);
     HTTPSession& operator=(const HTTPSession&) = delete;
-
-    E<void> useUnixSocket(const char* path) override;
 
     using HTTPSessionInterface::get;
     // The returned pointer is garenteed to be non-null.
@@ -82,6 +81,7 @@ public:
 private:
     CURL* handle = nullptr;
     HTTPResponse res;
+    std::optional<std::string> socket = std::nullopt;
 
     void prepareForNewRequest();
 

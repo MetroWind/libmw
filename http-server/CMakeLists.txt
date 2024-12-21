@@ -73,6 +73,7 @@ if(LIBMW_BUILD_TESTS)
 
   target_link_libraries(mw-http-server_test PRIVATE
     ${LIBS}
+    mw-url
     GTest::gtest_main
     GTest::gmock_main
   )

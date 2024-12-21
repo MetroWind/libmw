@@ -41,9 +41,13 @@ namespace mw
 class HTTPServer
 {
 public:
+    using Request = httplib::Request;
+    using Response = httplib::Response;
+
     HTTPServer() = delete;
     explicit HTTPServer(const std::string& socket_file);
     HTTPServer(const std::string& listen_address, int listen_port);
+    ~HTTPServer();
 
     E<void> start();
     void stop();
@@ -52,7 +56,7 @@ public:
 protected:
     httplib::Server server;
 
-    void setup();
+    virtual void setup();
 
 private:
     std::variant<std::string, std::tuple<std::string, int>> listen;
