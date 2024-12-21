@@ -29,7 +29,7 @@ jobs:
       run: "sudo apt install -y curl libcurl4-openssl-dev sqlite3 libsqlite3-dev"
 
     - name: Configure CMake
-      run: "cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DLIBMW_BUILD_TESTS=ON -DLIBMW_BUILD_URL=on -DLIBMW_BUILD_SQLITE=on"
+      run: "cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DLIBMW_BUILD_TESTS=ON -DLIBMW_BUILD_URL=on -DLIBMW_BUILD_SQLITE=on -DLIBMW_BUILD_HTTP_SERVER=on"
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
