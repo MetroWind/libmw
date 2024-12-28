@@ -45,6 +45,7 @@ set(LIBS
 
 set(INCLUDES
   ../includes
+  ${httplib_SOURCE_DIR}
 )
 
 add_library(mw-http-server STATIC ${HEADERS} ${SOURCE_FILES})
@@ -52,7 +53,7 @@ add_library(mw-http-server STATIC ${HEADERS} ${SOURCE_FILES})
 set_property(TARGET mw-http-server PROPERTY CXX_STANDARD 23)
 set_property(TARGET mw-http-server PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
 target_compile_options(mw-http-server PRIVATE -Wall -Wextra -Wpedantic)
-target_include_directories(mw-http-server PRIVATE ${INCLUDES})
+target_include_directories(mw-http-server PUBLIC ${INCLUDES})
 target_link_libraries(mw-http-server PRIVATE ${LIBS})
 
 if(LIBMW_BUILD_TESTS)

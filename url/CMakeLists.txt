@@ -8,7 +8,6 @@ option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
 include(FetchContent)
 
 if(LIBMW_BUILD_TESTS)
-  message("Will build libmw tests.")
   FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
@@ -22,8 +21,6 @@ if(LIBMW_BUILD_TESTS)
     GIT_TAG v0.18.0
   )
   FetchContent_MakeAvailable(httplib)
-else()
-  message("Not building libmw tests.")
 endif()
 
 find_package(CURL REQUIRED)
