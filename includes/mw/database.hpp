@@ -18,7 +18,12 @@
 namespace mw
 {
 
-// A simple RAII wrapper of sqlite3_stmt*.
+/// \brief A simple RAII wrapper of `sqlite3_stmt*`.
+///
+/// A statement object can be constructed with the `fromStr()` static
+/// member function. *Do not use the default constructor*. This class
+/// is not copyable. This class is usually not constructed by itself.
+/// The usual use case is to use `SQLite::statementFromStr()`.
 class SQLiteStatement
 {
 public:
@@ -28,47 +33,89 @@ public:
     SQLiteStatement& operator=(SQLiteStatement&& rhs);
     ~SQLiteStatement();
 
+    /// Construct a statement object from a SQL statement string.
     static E<SQLiteStatement> fromStr(sqlite3* db, std::string_view expr);
 
+    /// Get the raw sqlite3_stmt pointer.
     sqlite3_stmt* data() const { return sql; }
 
+    /// \brief Bind values to the placeholders in the SQL statement.
+    ///
+    /// In the case of parameterized statement, this function binds
+    /// some values to the placeholders. As of now only the `?`
+    /// placeholder is supported. Example:
+    ///
+    /// ```
+    /// // statement is `SELECT * FROM table WHERE name = ? AND number > ?;`.
+    /// statement.bind<std::string, uint64_t>("some name", 42);
+    /// ```
+    ///
+    /// It is undefined behavior if the number/type of the arguments
+    /// does not match the template arguments.
     template<typename... Types>
     E<void> bind(Types... args) const;
 
-    // Do not use.
+    /// Do not use.
     SQLiteStatement() = default;
 private:
     sqlite3_stmt* sql = nullptr;
 };
 
-// This should be thread-safe. Multiple threads should be able to use
-// the same SQLite object at the same time. This is because SQLite 3
-// uses serialized threading model by default. See
-// https://www.sqlite.org/threadsafe.html.
+/// \brief An abstraction of a SQLite connection.
+///
+/// This should be thread-safe. Multiple threads should be able to use
+/// the same SQLite object at the same time. This is because SQLite 3
+/// uses serialized threading model by default. See
+/// https://www.sqlite.org/threadsafe.html.
+///
+/// This class is not copyable.
 class SQLite
 {
 public:
+    /// Construct a null SQLite object.
     SQLite() = default;
     ~SQLite();
     SQLite(const SQLite&) = delete;
     SQLite& operator=(const SQLite&) = delete;
 
+    /// \brief Open a SQLite database from a file.
+    ///
+    /// \param db_file The path to the database file
     static E<std::unique_ptr<SQLite>>
     connectFile(const std::string& db_file);
+
+    /// Create a in-memory SQLite database.
     static E<std::unique_ptr<SQLite>> connectMemory();
 
+    /// \brief Construct a SQLiteStatement object from a SQLite
+    /// statement string.
+    ///
+    /// Construct a SQLiteStatement object from a SQLite statement
+    /// string. This is the recommended way to construct
+    /// SQLiteStatement objects.
     E<SQLiteStatement> statementFromStr(std::string_view expr);
 
-    // Evaluate a SQL statement, and retrieve the result. In the
-    // return value, each element is a row, which is modeled as a
-    // tuple. The type of the tuple depends on the template arguments
-    // you pass when calling this function. Example:
-    //
-    //   eval<int, std::string>(...);
-    //
-    // You are responsible to make sure that the template arguments
-    // matche the expected result of the SQL statement. Otherwise it
-    // could seg fault.
+    /// \brief Evaluate a SQL statement, and retrieve the result.
+    ///
+    /// The `eval()` series of functions evaluate a SQL statement, and
+    /// retrieve the result. In the return value, each element is a
+    /// row, which is modeled as a tuple. The type of the tuple
+    /// depends on the template arguments you pass when calling this
+    /// function. Example:
+    ///
+    /// ```
+    /// auto rows = db.eval<int, std::string>("SELECT id, name FROM table;");
+    /// for(const std::tuple<int, std::string>& row: *rows)
+    /// {
+    ///     int id = std::get<0>(row);
+    ///     std::string_view name = std::get<1>(row);
+    ///     // ...
+    /// }
+    /// ```
+    ///
+    /// You are responsible to make sure that the template arguments
+    /// match the expected result of the SQL statement. Otherwise it
+    /// is undefined behavior.
     template<typename... Types>
     E<std::vector<std::tuple<Types...>>> eval(SQLiteStatement sql_code) const;
     template<typename... Types>
@@ -79,7 +126,7 @@ public:
         return eval<Types...>(sql_code.c_str());
     }
 
-    // Evaluate a SQL statement that is not supposed to return data.
+    /// Evaluate a SQL statement that is not supposed to return data.
     E<void> execute(SQLiteStatement sql_code) const;
     E<void> execute(const char* sql_code) const;
     E<void> execute(const std::string& sql_code) const
@@ -87,8 +134,12 @@ public:
         return execute(sql_code.c_str());
     }
 
-    // Evaluate a SQL statement that is supposed to return a single
-    // value. Return that value.
+    /// \brief Evaluate a SQL statement that is supposed to return a
+    /// single value, and return that value.
+    ///
+    /// The `evalToValue()` series of functions evaluate a SQL
+    /// statement that is supposed to return a single value, and
+    /// return that value. This is just a wrapper of `eval()`.
     template<typename T>
     E<T> evalToValue(SQLiteStatement sql_code) const;
     template<typename T>
@@ -99,9 +150,13 @@ public:
         return evalToValue<T>(sql_code.c_str());
     }
 
+    /// \brief Return the row ID of the last successful insert
+    /// command. See
+    /// https://www.sqlite.org/c3ref/last_insert_rowid.html.
     int64_t lastInsertRowID() const;
-    // Count the number of affected rows in the most recently finished
-    // INSERT, UPDATE or DELETE.
+
+    /// \brief Count the number of affected rows in the most recently
+    /// finished `INSERT`, `UPDATE` or `DELETE`.
     int64_t changedRowsCount() const;
 
 private:

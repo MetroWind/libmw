@@ -1,3 +1,5 @@
+/** @file Test */
+
 #pragma once
 
 #include <algorithm>
@@ -28,19 +30,21 @@
 #define ASSIGN_OR_RETURN(var, val)                                      \
     _ASSIGN_OR_RETURN_INNER(_CONCAT_NAMES(assign_or_return_tmp, __COUNTER__), var, val)
 
-// Val should be a rvalue.
+/// Val should be a rvalue.
 #define DO_OR_RETURN(val)                               \
     if(auto rt = val; !rt.has_value())                  \
     {                                                   \
         return std::unexpected(std::move(rt).error());  \
     }
 
+/// The overall namespace
 namespace mw
 {
 
 using Clock = std::chrono::system_clock;
 using Time = std::chrono::time_point<Clock>;
 
+/// URL-encode the argument. This uses libcurl.
 inline std::string urlEncode(std::string_view s)
 {
     char* url_raw = curl_easy_escape(nullptr, s.data(), s.size());
