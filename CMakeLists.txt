@@ -48,6 +48,8 @@ set(INCLUDES
   includes/mw
 )
 
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 add_library(mw STATIC ${HEADERS} ${SOURCE_FILES})
 # set_target_properties(mw PROPERTIES PUBLIC_HEADER ${HEADERS})
 set_property(TARGET mw PROPERTY CXX_STANDARD 23)
