@@ -1,9 +1,10 @@
-#include <string_view>
-#include <memory>
-#include <vector>
 #include <expected>
-#include <tuple>
-#include <optional>
+#include <format>
+#include <memory>
+#include <stdint.h>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include <sqlite3.h>
 

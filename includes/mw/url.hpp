@@ -5,7 +5,6 @@
 
 #include <curl/curl.h>
 
-#include "utils.hpp"
 #include "error.hpp"
 
 namespace mw

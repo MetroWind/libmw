@@ -1,16 +1,21 @@
-#include <string>
-#include <span>
+#include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstring>
-#include <charconv>
-#include <string_view>
-#include <algorithm>
-#include <iterator>
+#include <expected>
 #include <format>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
 #include <curl/curl.h>
 
 #include "http_client.hpp"
+#include "error.hpp"
 
 namespace mw
 {

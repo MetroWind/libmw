@@ -1,16 +1,18 @@
 #include <array>
-#include <format>
 #include <expected>
+#include <format>
+#include <string>       // for basic_string, char_traits, allocator, operator+
+#include <string_view>  // for string_view
+#include <sys/types.h>  // for ssize_t, pid_t
 #include <utility>
-#include <ranges>
+#include <variant>      // for variant, swap, get, holds_alternative
 
 #include <errno.h>
-#include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <signal.h>
 
 #include "error.hpp"
 #include "exec.hpp"

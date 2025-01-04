@@ -1,6 +1,9 @@
 #include <expected>
+#include <stddef.h>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 
 #include <curl/curl.h>
 
