@@ -52,7 +52,8 @@ E<void> HTTPServer::start()
             else
             {
                 auto& [addr, port] = std::get<std::tuple<std::string, int>>(listen);
-                server.listen(addr, port);}
+                server.listen(addr, port);
+            }
         }
         catch(const std::exception& e)
         {
@@ -77,7 +78,6 @@ void HTTPServer::stop()
 
 void HTTPServer::wait()
 {
-    while(!should_stop && server.is_running());
     server_thread.join();
     if(std::holds_alternative<std::string>(listen))
     {
