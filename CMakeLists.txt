@@ -8,6 +8,7 @@ option(LIBMW_BUILD_TESTS "Build libmw tests" OFF)
 option(LIBMW_BUILD_URL "Build mw::url" OFF)
 option(LIBMW_BUILD_SQLITE "Build mw::sqlite" OFF)
 option(LIBMW_BUILD_HTTP_SERVER "Build mw::http-server" OFF)
+option(LIBMW_BUILD_CRYPTO "Build mw::crypto" OFF)
 
 include(FetchContent)
 
@@ -101,6 +102,12 @@ if(LIBMW_BUILD_SQLITE)
   message("Will build mw::sqlite.")
   add_subdirectory(sqlite)
   add_library(mw::sqlite ALIAS mw-sqlite)
+endif()
+
+if(LIBMW_BUILD_CRYPTO)
+  message("Will build mw::crypto.")
+  add_subdirectory(crypto)
+  add_library(mw::crypto ALIAS mw-crypto)
 endif()
 
 if(LIBMW_BUILD_HTTP_SERVER)
