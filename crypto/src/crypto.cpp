@@ -1,3 +1,5 @@
+#include <expected>
+#include <vector>
 #include <string>
 #include <iomanip>
 #include <sstream>
@@ -11,6 +13,18 @@
 namespace mw
 {
 
+E<std::string> HasherInterface::hashToHexStr(const std::string& bytes) const
+{
+    ASSIGN_OR_RETURN(auto hash, this->hashToBytes(bytes));
+    std::stringstream ss;
+    for(auto byte: hash)
+    {
+        ss << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<int>(byte);
+    }
+    return ss.str();
+}
+
 SHA256Hasher::SHA256Hasher()
     : ctx(EVP_MD_CTX_new())
 {
@@ -21,7 +35,7 @@ SHA256Hasher::~SHA256Hasher()
     EVP_MD_CTX_free(ctx);
 }
 
-E<std::string> SHA256Hasher::hashToHexStr(const std::string& bytes) const
+E<std::vector<unsigned char>> SHA256Hasher::hashToBytes(const std::string& bytes) const
 {
     if(ctx == nullptr)
     {
@@ -43,19 +57,13 @@ E<std::string> SHA256Hasher::hashToHexStr(const std::string& bytes) const
     {
         return std::unexpected(mw::runtimeError("Failed to finalize hash"));
     }
-
-    std::stringstream ss;
-    for(unsigned int i = 0; i < hash_length; ++i)
-    {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-    }
-
-    return ss.str();
+    std::vector<unsigned char> result(hash, hash + hash_length);
+    return result;
 }
 
-E<std::string> SHA256HalfHasher::hashToHexStr(const std::string& bytes) const
+E<std::vector<unsigned char>> SHA256HalfHasher::hashToBytes(const std::string& bytes) const
 {
-    ASSIGN_OR_RETURN(std::string hash, full_hasher.hashToHexStr(bytes));
+    ASSIGN_OR_RETURN(auto hash, full_hasher.hashToBytes(bytes));
     hash.resize(hash.size() / 2);
     return hash;
 }
