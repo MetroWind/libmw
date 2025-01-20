@@ -31,16 +31,19 @@ if(LIBMW_BUILD_TESTS)
 endif()
 
 set(SOURCE_FILES
+  auth.cpp
   http_server.cpp
 )
 
 set(HEADERS
+  ../includes/mw/auth.hpp
   ../includes/mw/http_server.hpp
 )
 
 set(LIBS
   httplib
   spdlog::spdlog
+  mw-url
 )
 
 set(INCLUDES
@@ -58,6 +61,7 @@ target_link_libraries(mw-http-server PRIVATE ${LIBS})
 
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
+    auth_test.cpp
     http_server_test.cpp
   )
 
@@ -74,7 +78,6 @@ if(LIBMW_BUILD_TESTS)
 
   target_link_libraries(mw-http-server_test PRIVATE
     ${LIBS}
-    mw-url
     GTest::gtest_main
     GTest::gmock_main
   )
