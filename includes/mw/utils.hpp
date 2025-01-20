@@ -12,6 +12,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <span>
 
 #include <curl/curl.h>
 
@@ -189,5 +190,24 @@ inline std::string escapeHTML(std::string_view s)
     }
     return buffer;
 }
+
+/// @brief Base64-encode some data.
+///
+/// @param data The bytes to encode
+///
+/// @param newline If true, line-wrap the resulting string with a line
+/// width of 72. Also ensure that the result ends with a newline.
+///
+/// @param pad If true, pad the result with “=”.
+std::string base64Encode(std::span<unsigned char> data, bool newline=false,
+                         bool pad=false);
+
+/// @brief Decode a base64 string into bytes.
+///
+/// Decode a base64 string into bytes. Both newlines and paddings in
+/// “data” are allowed but not required. Specifically, the content
+/// after (and including) the first padding character (“=”) is
+/// ignored.
+E<std::vector<unsigned char>> base64Decode(std::string_view data);
 
 } // namespace mw

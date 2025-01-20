@@ -33,6 +33,7 @@ endif()
 
 set(SOURCE_FILES
   src/exec.cpp
+  src/utils.cpp
 )
 
 set(HEADERS
