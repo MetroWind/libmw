@@ -19,8 +19,14 @@ FetchContent_Declare(
   GIT_TAG v1.12.0
 )
 
+FetchContent_Declare(
+  json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+)
+
 set(SPDLOG_USE_STD_FORMAT ON)
-FetchContent_MakeAvailable(httplib spdlog)
+FetchContent_MakeAvailable(httplib spdlog json)
 
 if(LIBMW_BUILD_TESTS)
   FetchContent_Declare(
@@ -49,6 +55,7 @@ set(LIBS
 set(INCLUDES
   ../includes
   ${httplib_SOURCE_DIR}
+  ${json_SOURCE_DIR}/single_include
 )
 
 add_library(mw-http-server STATIC ${HEADERS} ${SOURCE_FILES})
