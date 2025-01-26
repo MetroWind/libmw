@@ -39,6 +39,20 @@ TEST(HTTPServer, CanStartServerOnSocket)
     server.wait();
 }
 
+TEST(HTTPServer, CanStartServerOnSocketWithPort0)
+{
+    Server server("/tmp/mwtest.socket", 0);
+    server.start();
+    {
+        HTTPSession client("/tmp/mwtest.socket");
+        ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost/"));
+        EXPECT_EQ(res->status, 200);
+        EXPECT_EQ(res->payloadAsStr(), "index");
+    }
+    server.stop();
+    server.wait();
+}
+
 TEST(HTTPServer, CanStartServer)
 {
     Server server("localhost", 8123);

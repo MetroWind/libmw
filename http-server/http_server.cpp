@@ -16,14 +16,16 @@
 namespace mw
 {
 
-HTTPServer::HTTPServer(const std::string& socket_file)
-{
-    listen = socket_file;
-}
-
 HTTPServer::HTTPServer(const std::string& listen_address, int listen_port)
 {
-    listen = std::make_tuple(listen_address, listen_port);
+    if(listen_port == 0)
+    {
+        listen = listen_address;
+    }
+    else
+    {
+        listen = std::make_tuple(listen_address, listen_port);
+    }
 }
 
 HTTPServer::~HTTPServer()

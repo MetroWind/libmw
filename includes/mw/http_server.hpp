@@ -45,8 +45,16 @@ public:
     using Response = httplib::Response;
 
     HTTPServer() = delete;
-    explicit HTTPServer(const std::string& socket_file);
-    HTTPServer(const std::string& listen_address, int listen_port);
+
+    /// @brief Construct a server that listen to an address or a
+    /// socket file.
+    ///
+    /// @param listen_address The address to listen to. For example
+    /// “localhost”, “0.0.0.0”.
+    ///
+    /// @param listen_port The port to listen to. If this is 0,
+    /// `listen_address` is treated as a path to a socket file.
+    HTTPServer(const std::string& listen_address, int listen_port=0);
     ~HTTPServer();
 
     E<void> start();
