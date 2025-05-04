@@ -1,10 +1,16 @@
-#include <atomic>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <grp.h>
+#include <unistd.h>
+
 #include <exception>
 #include <filesystem>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
-#include <tuple>
 #include <variant>
 
 #include <httplib.h>
@@ -16,26 +22,17 @@
 namespace mw
 {
 
-HTTPServer::HTTPServer(const std::string& listen_address, int listen_port)
-{
-    if(listen_port == 0)
-    {
-        listen = listen_address;
-    }
-    else
-    {
-        listen = std::make_tuple(listen_address, listen_port);
-    }
-}
+HTTPServer::HTTPServer(const ListenAddress& listen_)
+        : listen(listen_) {}
 
 HTTPServer::~HTTPServer()
 {
-    if(std::holds_alternative<std::string>(listen))
+    if(std::holds_alternative<SocketFileInfo>(listen))
     {
-        const std::string& sock = std::get<std::string>(listen);
-        if(std::filesystem::exists(sock))
+        const SocketFileInfo& sock = std::get<SocketFileInfo>(listen);
+        if(std::filesystem::exists(sock.filename))
         {
-            std::filesystem::remove(sock);
+            std::filesystem::remove(sock.filename);
         }
     }
 }
@@ -46,15 +43,15 @@ E<void> HTTPServer::start()
     server_thread = std::thread([&] {
         try
         {
-            if(std::holds_alternative<std::string>(listen))
+            if(std::holds_alternative<SocketFileInfo>(listen))
             {
                 server.set_address_family(AF_UNIX).listen(
-                    std::get<std::string>(listen), 80);
+                    std::get<SocketFileInfo>(listen).filename, 80);
             }
             else
             {
-                auto& [addr, port] = std::get<std::tuple<std::string, int>>(listen);
-                server.listen(addr, port);
+                const IPSocketInfo sock = std::get<IPSocketInfo>(listen);
+                server.listen(sock.address, sock.port);
             }
         }
         catch(const std::exception& e)
@@ -64,6 +61,59 @@ E<void> HTTPServer::start()
     });
     while(!server.is_running());
     server.wait_until_ready();
+    if(std::holds_alternative<SocketFileInfo>(listen))
+    {
+        const SocketFileInfo& sock = std::get<SocketFileInfo>(listen);
+        if(sock.permission.has_value())
+        {
+            if(chmod(sock.filename.c_str(), *sock.permission) != 0)
+            {
+                spdlog::error(
+                    "Failed to change permmision on the socket file: {}",
+                    strerror(errno));
+            }
+        }
+
+        uid_t uid = 0;
+        if(std::holds_alternative<std::string>(sock.user))
+        {
+            const std::string& user = std::get<std::string>(sock.user);
+            passwd* pw = getpwnam(user.c_str());
+            if(pw == nullptr)
+            {
+                spdlog::error("Failed to set owner on the socket file. "
+                              "User not found: {}", user.c_str());
+            }
+            uid = pw->pw_uid;
+        }
+        else
+        {
+            uid = std::get<int>(sock.user);
+        }
+
+        gid_t gid = 0;
+        if(std::holds_alternative<std::string>(sock.group))
+        {
+            const std::string& the_group = std::get<std::string>(sock.group);
+            group* g = getgrnam(the_group.c_str());
+            if(g == nullptr)
+            {
+                spdlog::error("Failed to set group on the socket file. "
+                              "Group not found: {}", the_group.c_str());
+            }
+            gid = g->gr_gid;
+        }
+        else
+        {
+            gid = std::get<int>(sock.group);
+        }
+
+        if(chown(sock.filename.c_str(), uid, gid) != 0)
+        {
+            spdlog::error("Failed to set owner and group on the socket file: {}",
+                          strerror(errno));
+        }
+    }
     return {};
 }
 
@@ -81,9 +131,9 @@ void HTTPServer::stop()
 void HTTPServer::wait()
 {
     server_thread.join();
-    if(std::holds_alternative<std::string>(listen))
+    if(std::holds_alternative<SocketFileInfo>(listen))
     {
-        std::filesystem::remove(std::get<std::string>(listen));
+        std::filesystem::remove(std::get<SocketFileInfo>(listen).filename);
     }
 }
 

@@ -27,21 +27,7 @@ protected:
 
 TEST(HTTPServer, CanStartServerOnSocket)
 {
-    Server server("/tmp/mwtest.socket");
-    server.start();
-    {
-        HTTPSession client("/tmp/mwtest.socket");
-        ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost/"));
-        EXPECT_EQ(res->status, 200);
-        EXPECT_EQ(res->payloadAsStr(), "index");
-    }
-    server.stop();
-    server.wait();
-}
-
-TEST(HTTPServer, CanStartServerOnSocketWithPort0)
-{
-    Server server("/tmp/mwtest.socket", 0);
+    Server server(SocketFileInfo("/tmp/mwtest.socket"));
     server.start();
     {
         HTTPSession client("/tmp/mwtest.socket");
@@ -55,7 +41,7 @@ TEST(HTTPServer, CanStartServerOnSocketWithPort0)
 
 TEST(HTTPServer, CanStartServer)
 {
-    Server server("localhost", 8123);
+    Server server(IPSocketInfo{"localhost", 8123});
     server.start();
     {
         HTTPSession client;

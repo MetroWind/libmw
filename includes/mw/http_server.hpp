@@ -7,6 +7,7 @@
 #include <httplib.h>
 
 #include <mw/error.hpp>
+#include <variant>
 
 #define _ASSIGN_OR_RESPOND_ERROR(tmp, var, val, res)                    \
     auto tmp = val;                                                     \
@@ -38,23 +39,44 @@
 namespace mw
 {
 
+/// @brief A collection of information of a UNIX domain socket file
+struct SocketFileInfo
+{
+    /// The path of the socket file
+    std::string filename;
+    /// The owner of the socket file. This is either the user name, or
+    /// the user ID. If this is -1, the owner is unchanged.
+    std::variant<std::string, int> user;
+    /// The group of the socket file. This is either the group name,
+    /// or the group ID. If this is -1, the group is unchanged.
+    std::variant<std::string, int> group;
+    /// The integer representation of the permission bits of the
+    /// socket file.
+    std::optional<unsigned int> permission;
+
+    explicit SocketFileInfo(std::string_view path)
+            : filename(path), user(-1), group(-1), permission(std::nullopt)
+    {}
+};
+
+struct IPSocketInfo
+{
+    std::string address;
+    int port;
+};
+
 class HTTPServer
 {
 public:
     using Request = httplib::Request;
     using Response = httplib::Response;
+    using ListenAddress = std::variant<SocketFileInfo, IPSocketInfo>;
 
     HTTPServer() = delete;
 
     /// @brief Construct a server that listen to an address or a
     /// socket file.
-    ///
-    /// @param listen_address The address to listen to. For example
-    /// “localhost”, “0.0.0.0”.
-    ///
-    /// @param listen_port The port to listen to. If this is 0,
-    /// `listen_address` is treated as a path to a socket file.
-    HTTPServer(const std::string& listen_address, int listen_port=0);
+    explicit HTTPServer(const ListenAddress& listen);
     ~HTTPServer();
 
     E<void> start();
@@ -67,7 +89,7 @@ protected:
     virtual void setup();
 
 private:
-    std::variant<std::string, std::tuple<std::string, int>> listen;
+    ListenAddress listen;
     std::atomic<bool> should_stop;
     std::thread server_thread;
 };
