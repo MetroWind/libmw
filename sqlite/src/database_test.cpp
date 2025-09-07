@@ -46,14 +46,19 @@ TEST(Database, ParametrizedStatement)
     ASSERT_TRUE(db->execute("CREATE TABLE test (a INTEGER, b TEXT);")
                 .has_value());
     ASSIGN_OR_FAIL(auto sql, db->statementFromStr(
-        "INSERT INTO test (a, b) VALUES (?, ?), (2, ?);"));
-    auto result = sql.bind(1, "aaa", "bbb");
+        "INSERT INTO test (a, b) VALUES (?, ?), (2, ?), (?, ?);"));
+    auto result = sql.bind(1, "aaa", "bbb", std::nullopt, std::nullopt);
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE(db->execute(std::move(sql)).has_value());
     ASSIGN_OR_FAIL(auto result0, (db->eval<int64_t, std::string>(
         "SELECT * FROM test;")));
-    EXPECT_EQ(result0.size(), 2);
+    EXPECT_EQ(result0.size(), 3);
     ASSIGN_OR_FAIL(auto result1, (db->eval<int64_t, std::string>(
         "SELECT * FROM test WHERE b = 'aaa';")));
     EXPECT_EQ(result1.size(), 1);
+    ASSIGN_OR_FAIL(auto result2, (db->eval<int64_t, std::string>(
+        "SELECT * FROM test WHERE b IS NULL;")));
+    EXPECT_EQ(result2.size(), 1);
+    EXPECT_EQ(std::get<0>(result2[0]), 0);
+    EXPECT_TRUE(std::get<1>(result2[0]).empty());
 }

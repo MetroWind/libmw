@@ -276,6 +276,13 @@ inline E<void> bindOne(const SQLiteStatement& sql, int i, const char* x)
                     "Failed to bind parameter");
 }
 
+inline E<void> bindOne(const SQLiteStatement& sql, int i,
+                       [[maybe_unused]] std::nullopt_t _)
+{
+    return sqlMaybe(sqlite3_bind_null(sql.data(), i),
+                    "Failed to bind parameter");
+}
+
 template<typename T>
 inline E<void> bindInternal(const SQLiteStatement& sql, int i, T x)
 {
