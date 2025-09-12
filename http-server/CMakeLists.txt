@@ -22,7 +22,11 @@ FetchContent_Declare(
 FetchContent_Declare(
   json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.12.0
+  # TODO: Use 3.12.1.
+  #
+  # Temporarily swtich to develop because of
+  # https://github.com/nlohmann/json/issues/4756.
+  GIT_TAG develop
 )
 
 set(SPDLOG_USE_STD_FORMAT ON)
