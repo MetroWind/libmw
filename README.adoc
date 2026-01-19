@@ -1,36 +1,104 @@
 = Libmw
 
+Libmw is a modular C++23 utility library providing wrappers and helpers for common tasks such as HTTP networking, database access, cryptography, and system execution.
+
+== Modules
+
+The library is split into several optional components:
+
+* **Core** (`mw`): Basic utilities, string manipulation, error handling, and process execution (`exec`).
+* **Crypto** (`mw::crypto`): Wrappers around OpenSSL for common cryptographic operations.
+* **SQLite** (`mw::sqlite`): A C++ wrapper for SQLite3 databases.
+* **URL** (`mw::url`): URL parsing and a HTTP client wrapper using cURL.
+* **HTTP Server** (`mw::http-server`): An HTTP server implementation based on `cpp-httplib`, including authentication helpers.
+
+== Requirements
+
+* C++23 compatible compiler
+* CMake 3.24 or later
+
+== Dependencies
+
+Depending on the modules you enable, you may need the following system libraries installed:
+
+* **OpenSSL** (for `mw::crypto`)
+* **SQLite3** (for `mw::sqlite`)
+* **cURL** (for `mw::url`)
+
+Internal dependencies handled automatically via CMake FetchContent:
+
+* `cpp-httplib`
+* `spdlog`
+* `nlohmann/json`
+* `googletest` (for tests)
+
 == Usage
 
-[source]
+You can integrate Libmw into your project using CMake's `FetchContent`.
+
+[source,cmake]
 ----
 include(FetchContent)
 FetchContent_Declare(
   libmw
   GIT_REPOSITORY https://github.com/MetroWind/libmw.git
+  GIT_TAG main # Replace with a specific tag or commit hash
 )
+# Enable the modules you need before declaring the content
+set(LIBMW_BUILD_URL ON)
+set(LIBMW_BUILD_HTTP_SERVER ON)
+
 FetchContent_MakeAvailable(libmw)
-add_executable(some_executable main.cpp)
-target_include_directories(some_executable PRIVATE ${libmw_SOURCE_DIR}/includes)
-target_link_libraries(some_executable PRIVATE mw)
+
+add_executable(my_app main.cpp)
+
+# Link against the modules you need
+target_link_libraries(my_app PRIVATE
+    mw::mw
+    mw::url
+    mw::http-server
+)
+
+# Note: For the core 'mw' library, you currently need to explicitly add the include directory
+# if you are using 'mw::mw' directly. Other modules export their include paths automatically.
+target_include_directories(my_app PRIVATE ${libmw_SOURCE_DIR}/includes)
 ----
 
-In `main.cpp`,
+== Configuration Options
 
-[source,c++]
+The following CMake options are available to control which modules are built:
+
+|===
+| Option | Description | Default
+
+| `LIBMW_BUILD_TESTS` | Build unit tests | `OFF`
+| `LIBMW_BUILD_URL` | Build `mw::url` module | `OFF`
+| `LIBMW_BUILD_SQLITE` | Build `mw::sqlite` module | `OFF`
+| `LIBMW_BUILD_CRYPTO` | Build `mw::crypto` module | `OFF`
+| `LIBMW_BUILD_HTTP_SERVER` | Build `mw::http-server` module | `OFF`
+|===
+
+== Building from Source
+
+To build the library and run tests locally:
+
+[source,bash]
 ----
-#include <iostream>
-#include <mw/utils.hpp>
+# Configure with all modules enabled
+cmake -B build -S . \
+    -DLIBMW_BUILD_TESTS=ON \
+    -DLIBMW_BUILD_URL=ON \
+    -DLIBMW_BUILD_SQLITE=ON \
+    -DLIBMW_BUILD_CRYPTO=ON \
+    -DLIBMW_BUILD_HTTP_SERVER=ON
 
-int main()
-{
-    // Prints “aaa bbb”.
-    std::cout << strip("   aaa bbb ") << std::endl;
-    return 0;
-}
+# Build
+cmake --build build
+
+# Run tests
+ctest --test-dir build
 ----
 
-If you use features that requires cURL, add `find_package(CURL
-REQUIRED)` to your CMakelists, and link to `${CURL_LIBRARIES}`. If you
-use features that requires SQLite3, add `find_package(SQLite3
-REQUIRED)` to your CMakelists, and link to `${SQLite3_LIBRARIES}`.
+== License
+
+This project is licensed under the MIT License. See the `COPYING.txt` file for details.
