@@ -53,4 +53,28 @@ private:
     SHA256Hasher full_hasher;
 };
 
+enum class SignatureAlgorithm
+{
+    RSA_PSS_SHA512,
+    RSA_V1_5_SHA256,
+    HMAC_SHA256,
+    ECDSA_P256_SHA256,
+    ECDSA_P384_SHA384,
+    ED25519
+};
+
+/// @brief Verifies the signature of the data using the provided key and
+/// algorithm.
+///
+/// @param algo The signature algorithm to use.
+/// @param key The key to verify with. For asymmetric algorithms, this should be
+/// a PEM encoded public key. For HMAC, this is the raw key bytes.
+/// @param signature The signature to verify.
+/// @param data The data that was signed.
+/// @return True if the signature is valid, False if invalid. Returns an error
+/// if verification could not be performed (e.g. invalid key format).
+E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
+                        const std::vector<unsigned char>& signature,
+                        const std::string& data);
+
 } // namespace mw
