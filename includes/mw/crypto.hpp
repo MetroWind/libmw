@@ -77,4 +77,15 @@ E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
                         const std::vector<unsigned char>& signature,
                         const std::string& data);
 
+/// @brief Signs the data using the provided key and algorithm.
+///
+/// @param algo The signature algorithm to use.
+/// @param key The private key to sign with. For asymmetric algorithms, this
+/// should be a PEM encoded private key.
+/// @param data The data to sign.
+/// @return The signature bytes, or an error if signing failed.
+E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
+                                   const std::string& key,
+                                   const std::string& data);
+
 } // namespace mw

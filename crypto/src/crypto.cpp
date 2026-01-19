@@ -65,6 +65,43 @@ E<EVP_PKEY_ptr> loadKey(SignatureAlgorithm algo, const std::string& key)
     return pkey;
 }
 
+E<EVP_PKEY_ptr> loadPrivateKey(SignatureAlgorithm algo, const std::string& key)
+{
+    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
+
+    if (algo == SignatureAlgorithm::HMAC_SHA256)
+    {
+        pkey.reset(EVP_PKEY_new_mac_key(
+            EVP_PKEY_HMAC, nullptr,
+            reinterpret_cast<const unsigned char*>(key.data()),
+            static_cast<int>(key.size())));
+
+        if (!pkey)
+        {
+            return std::unexpected(runtimeError("Failed to create HMAC key"));
+        }
+    }
+    else
+    {
+        BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
+                    BIO_free);
+        if (!bio)
+        {
+            return std::unexpected(runtimeError("Failed to create key BIO"));
+        }
+
+        pkey.reset(
+            PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
+        if (!pkey)
+        {
+            return std::unexpected(
+                runtimeError(getOpenSSLError("Failed to load private key")));
+        }
+    }
+
+    return pkey;
+}
+
 const EVP_MD* getDigestMethod(SignatureAlgorithm algo)
 {
     switch (algo)
@@ -287,6 +324,66 @@ E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
     }
 
     return verifyAsymmetric(pkey.get(), algo, data, signature);
+}
+
+E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
+                                   const std::string& key,
+                                   const std::string& data)
+{
+    ERR_clear_error();
+    ASSIGN_OR_RETURN(auto pkey, loadPrivateKey(algo, key));
+
+    EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if (!md_ctx)
+    {
+        return std::unexpected(runtimeError("Failed to create MD context"));
+    }
+
+    const EVP_MD* md = getDigestMethod(algo);
+    EVP_PKEY_CTX* pkey_ctx = nullptr;
+
+    if (EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, md, nullptr, pkey.get()) <=
+        0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_DigestSignInit failed")));
+    }
+
+    if (algo == SignatureAlgorithm::RSA_PSS_SHA512)
+    {
+        if (auto result = configureRSAPSS(pkey_ctx); !result)
+        {
+            return std::unexpected(result.error());
+        }
+    }
+
+    // Check parameters for EC/DSA
+    if (EVP_PKEY_id(pkey.get()) == EVP_PKEY_EC &&
+        EVP_PKEY_missing_parameters(pkey.get()))
+    {
+        return std::unexpected(runtimeError("Key missing parameters"));
+    }
+
+    size_t sig_len = 0;
+    if (EVP_DigestSign(md_ctx.get(), nullptr, &sig_len,
+                       reinterpret_cast<const unsigned char*>(data.data()),
+                       data.size()) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_DigestSign (length) failed")));
+    }
+
+    std::vector<unsigned char> signature(sig_len);
+    if (EVP_DigestSign(md_ctx.get(), signature.data(), &sig_len,
+                       reinterpret_cast<const unsigned char*>(data.data()),
+                       data.size()) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_DigestSign failed")));
+    }
+    signature.resize(sig_len);
+
+    return signature;
 }
 
 } // namespace mw
