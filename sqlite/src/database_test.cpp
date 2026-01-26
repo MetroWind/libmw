@@ -1,4 +1,5 @@
 #include <memory>
+#include <optional>
 #include <stdint.h>
 #include <string>
 #include <tuple>
@@ -61,4 +62,33 @@ TEST(Database, ParametrizedStatement)
     EXPECT_EQ(result2.size(), 1);
     EXPECT_EQ(std::get<0>(result2[0]), 0);
     EXPECT_TRUE(std::get<1>(result2[0]).empty());
+}
+
+TEST(Database, OptionalBinding)
+{
+    ASSIGN_OR_FAIL(auto db, SQLite::connectMemory());
+    ASSERT_TRUE(db->execute("CREATE TABLE test (a INTEGER, b TEXT);")
+                .has_value());
+    ASSIGN_OR_FAIL(auto sql, db->statementFromStr(
+        "INSERT INTO test (a, b) VALUES (?, ?);"));
+
+    std::optional<int64_t> a1 = 42;
+    std::optional<std::string> b1 = "hello";
+    ASSERT_TRUE(sql.bind(a1, b1).has_value());
+    ASSERT_TRUE(db->execute(std::move(sql)).has_value());
+
+    ASSIGN_OR_FAIL(auto sql2, db->statementFromStr(
+        "INSERT INTO test (a, b) VALUES (?, ?);"));
+    std::optional<int64_t> a2 = std::nullopt;
+    std::optional<std::string> b2 = std::nullopt;
+    ASSERT_TRUE(sql2.bind(a2, b2).has_value());
+    ASSERT_TRUE(db->execute(std::move(sql2)).has_value());
+
+    ASSIGN_OR_FAIL(auto result, (db->eval<std::optional<int64_t>, std::optional<std::string>>(
+        "SELECT * FROM test ORDER BY a DESC;")));
+    ASSERT_EQ(result.size(), 2);
+    EXPECT_EQ(std::get<0>(result[0]), 42);
+    EXPECT_EQ(std::get<1>(result[0]), "hello");
+    EXPECT_EQ(std::get<0>(result[1]), std::nullopt);
+    EXPECT_EQ(std::get<1>(result[1]), std::nullopt);
 }

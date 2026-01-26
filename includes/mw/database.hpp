@@ -2,6 +2,7 @@
 
 #include <exception>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -205,6 +206,21 @@ inline void getValue(SQLiteStatement& sql, int i, std::string& s)
     s = reinterpret_cast<const char*>(raw);
 }
 
+template<typename T>
+inline void getValue(SQLiteStatement& sql, int i, std::optional<T>& x)
+{
+    if(sqlite3_column_type(sql.data(), i) == SQLITE_NULL)
+    {
+        x = std::nullopt;
+    }
+    else
+    {
+        T val;
+        getValue(sql, i, val);
+        x = std::move(val);
+    }
+}
+
 // template<typename T, typename T1, typename... Types>
 // inline std::tuple<T, T1, Types...> getRowInternal(SQLiteStatement& sql, int i)
 // {
@@ -281,6 +297,16 @@ inline E<void> bindOne(const SQLiteStatement& sql, int i,
 {
     return sqlMaybe(sqlite3_bind_null(sql.data(), i),
                     "Failed to bind parameter");
+}
+
+template<typename T>
+inline E<void> bindOne(const SQLiteStatement& sql, int i, const std::optional<T>& x)
+{
+    if(x.has_value())
+    {
+        return bindOne(sql, i, *x);
+    }
+    return bindOne(sql, i, std::nullopt);
 }
 
 template<typename T>
