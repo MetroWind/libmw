@@ -88,4 +88,16 @@ E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
                                    const std::string& key,
                                    const std::string& data);
 
+struct KeyPair
+{
+    std::string public_key;
+    std::string private_key;
+};
+
+/// @brief Generates a new ED25519 key pair.
+///
+/// @return A KeyPair containing the PEM encoded public and private keys, or an
+/// error if generation fails.
+E<KeyPair> generateEd25519KeyPair();
+
 } // namespace mw

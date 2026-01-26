@@ -264,3 +264,30 @@ TEST(Signature, CanSignAndVerify)
         EXPECT_TRUE(valid);
     }
 }
+
+TEST(Signature, CanGenerateAndVerifyEd25519KeyPair)
+{
+    ASSIGN_OR_FAIL(auto key_pair, mw::generateEd25519KeyPair());
+    EXPECT_FALSE(key_pair.public_key.empty());
+    EXPECT_FALSE(key_pair.private_key.empty());
+
+    std::string data = "test message for generated key";
+
+    // Sign using the generated private key
+    ASSIGN_OR_FAIL(auto signature,
+                   mw::sign(mw::SignatureAlgorithm::ED25519,
+                            key_pair.private_key, data));
+
+    // Verify using the generated public key
+    ASSIGN_OR_FAIL(bool valid,
+                   mw::verifySignature(mw::SignatureAlgorithm::ED25519,
+                                       key_pair.public_key, signature, data));
+    EXPECT_TRUE(valid);
+
+    // Verify invalid signature
+    signature[0] ^= 0xFF;
+    ASSIGN_OR_FAIL(bool invalid,
+                   mw::verifySignature(mw::SignatureAlgorithm::ED25519,
+                                       key_pair.public_key, signature, data));
+    EXPECT_FALSE(invalid);
+}

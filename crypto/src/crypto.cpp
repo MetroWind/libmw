@@ -386,4 +386,65 @@ E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
     return signature;
 }
 
+E<KeyPair> generateEd25519KeyPair()
+{
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+    if (!ctx)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to create context")));
+    }
+    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx_ptr(
+        ctx, EVP_PKEY_CTX_free);
+
+    if (EVP_PKEY_keygen_init(ctx) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to init keygen")));
+    }
+
+    EVP_PKEY* pkey_raw = nullptr;
+    if (EVP_PKEY_keygen(ctx, &pkey_raw) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to generate key")));
+    }
+    EVP_PKEY_ptr pkey(pkey_raw, EVP_PKEY_free);
+
+    BIO_ptr pub_bio(BIO_new(BIO_s_mem()), BIO_free);
+    if (!pub_bio)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to create public key BIO")));
+    }
+    if (!PEM_write_bio_PUBKEY(pub_bio.get(), pkey.get()))
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to write public key")));
+    }
+
+    char* pub_data;
+    long pub_len = BIO_get_mem_data(pub_bio.get(), &pub_data);
+    std::string public_key(pub_data, pub_len);
+
+    BIO_ptr priv_bio(BIO_new(BIO_s_mem()), BIO_free);
+    if (!priv_bio)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to create private key BIO")));
+    }
+    if (!PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), nullptr, nullptr,
+                                  0, nullptr, nullptr))
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to write private key")));
+    }
+
+    char* priv_data;
+    long priv_len = BIO_get_mem_data(priv_bio.get(), &priv_data);
+    std::string private_key(priv_data, priv_len);
+
+    return KeyPair{public_key, private_key};
+}
+
 } // namespace mw
