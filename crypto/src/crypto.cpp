@@ -311,9 +311,9 @@ E<std::vector<unsigned char>> SHA256HalfHasher::hashToBytes(
     return hash;
 }
 
-E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
-                        const std::vector<unsigned char>& signature,
-                        const std::string& data)
+E<bool> Crypto::verifySignature(SignatureAlgorithm algo, const std::string& key,
+                                const std::vector<unsigned char>& signature,
+                                const std::string& data)
 {
     ERR_clear_error();
     ASSIGN_OR_RETURN(auto pkey, loadKey(algo, key));
@@ -326,9 +326,9 @@ E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
     return verifyAsymmetric(pkey.get(), algo, data, signature);
 }
 
-E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
-                                   const std::string& key,
-                                   const std::string& data)
+E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
+                                           const std::string& key,
+                                           const std::string& data)
 {
     ERR_clear_error();
     ASSIGN_OR_RETURN(auto pkey, loadPrivateKey(algo, key));
@@ -386,7 +386,7 @@ E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
     return signature;
 }
 
-E<KeyPair> generateEd25519KeyPair()
+E<KeyPair> Crypto::generateEd25519KeyPair()
 {
     EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
     if (!ctx)

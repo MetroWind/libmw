@@ -63,41 +63,62 @@ enum class SignatureAlgorithm
     ED25519
 };
 
-/// @brief Verifies the signature of the data using the provided key and
-/// algorithm.
-///
-/// @param algo The signature algorithm to use.
-/// @param key The key to verify with. For asymmetric algorithms, this should be
-/// a PEM encoded public key. For HMAC, this is the raw key bytes.
-/// @param signature The signature to verify.
-/// @param data The data that was signed.
-/// @return True if the signature is valid, False if invalid. Returns an error
-/// if verification could not be performed (e.g. invalid key format).
-E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
-                        const std::vector<unsigned char>& signature,
-                        const std::string& data);
-
-/// @brief Signs the data using the provided key and algorithm.
-///
-/// @param algo The signature algorithm to use.
-/// @param key The private key to sign with. For asymmetric algorithms, this
-/// should be a PEM encoded private key.
-/// @param data The data to sign.
-/// @return The signature bytes, or an error if signing failed.
-E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
-                                   const std::string& key,
-                                   const std::string& data);
-
 struct KeyPair
 {
     std::string public_key;
     std::string private_key;
 };
 
-/// @brief Generates a new ED25519 key pair.
-///
-/// @return A KeyPair containing the PEM encoded public and private keys, or an
-/// error if generation fails.
-E<KeyPair> generateEd25519KeyPair();
+class CryptoInterface
+{
+public:
+    virtual ~CryptoInterface() = default;
+
+    /// @brief Verifies the signature of the data using the provided key and
+    /// algorithm.
+    ///
+    /// @param algo The signature algorithm to use.
+    /// @param key The key to verify with. For asymmetric algorithms, this should
+    /// be a PEM encoded public key. For HMAC, this is the raw key bytes.
+    /// @param signature The signature to verify.
+    /// @param data The data that was signed.
+    /// @return True if the signature is valid, False if invalid. Returns an error
+    /// if verification could not be performed (e.g. invalid key format).
+    virtual E<bool> verifySignature(
+        SignatureAlgorithm algo, const std::string& key,
+        const std::vector<unsigned char>& signature,
+        const std::string& data) = 0;
+
+    /// @brief Signs the data using the provided key and algorithm.
+    ///
+    /// @param algo The signature algorithm to use.
+    /// @param key The private key to sign with. For asymmetric algorithms, this
+    /// should be a PEM encoded private key.
+    /// @param data The data to sign.
+    /// @return The signature bytes, or an error if signing failed.
+    virtual E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
+                                               const std::string& key,
+                                               const std::string& data) = 0;
+
+    /// @brief Generates a new ED25519 key pair.
+    ///
+    /// @return A KeyPair containing the PEM encoded public and private keys, or
+    /// an error if generation fails.
+    virtual E<KeyPair> generateEd25519KeyPair() = 0;
+};
+
+class Crypto : public CryptoInterface
+{
+public:
+    E<bool> verifySignature(SignatureAlgorithm algo, const std::string& key,
+                            const std::vector<unsigned char>& signature,
+                            const std::string& data) override;
+
+    E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
+                                       const std::string& key,
+                                       const std::string& data) override;
+
+    E<KeyPair> generateEd25519KeyPair() override;
+};
 
 } // namespace mw
