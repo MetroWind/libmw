@@ -303,6 +303,43 @@ E<std::vector<unsigned char>> SHA256Hasher::hashToBytes(
     return result;
 }
 
+SHA512Hasher::SHA512Hasher()
+    : ctx(EVP_MD_CTX_new())
+{
+}
+
+SHA512Hasher::~SHA512Hasher()
+{
+    EVP_MD_CTX_free(ctx);
+}
+
+E<std::vector<unsigned char>> SHA512Hasher::hashToBytes(
+    const std::string& bytes) const
+{
+    if(ctx == nullptr)
+    {
+        return std::unexpected(mw::runtimeError("Null EVP context"));
+    }
+    if(!EVP_DigestInit_ex(ctx, EVP_sha512(), nullptr))
+    {
+        return std::unexpected(mw::runtimeError("Failed to initialize hasher"));
+    }
+    if(!EVP_DigestUpdate(ctx, bytes.c_str(), bytes.length()))
+    {
+        return std::unexpected(mw::runtimeError("Failed to update hash"));
+    }
+
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_length = 0;
+
+    if(!EVP_DigestFinal_ex(ctx, hash, &hash_length))
+    {
+        return std::unexpected(mw::runtimeError("Failed to finalize hash"));
+    }
+    std::vector<unsigned char> result(hash, hash + hash_length);
+    return result;
+}
+
 E<std::vector<unsigned char>> SHA256HalfHasher::hashToBytes(
     const std::string& bytes) const
 {

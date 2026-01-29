@@ -40,6 +40,18 @@ private:
     EVP_MD_CTX* ctx;
 };
 
+class SHA512Hasher : public HasherInterface
+{
+public:
+    SHA512Hasher();
+    ~SHA512Hasher() override;
+    E<std::vector<unsigned char>> hashToBytes(const std::string& bytes)
+        const override;
+
+private:
+    EVP_MD_CTX* ctx;
+};
+
 // This hasher takes the first half of the SHA256 hash.
 class SHA256HalfHasher : public HasherInterface
 {
