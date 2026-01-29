@@ -13,8 +13,9 @@ class HasherMock : public HasherInterface
 {
 public:
     ~HasherMock() override = default;
-    MOCK_METHOD(std::string, hashToHexStr, (const std::string& bytes),
-                (const override));
+
+    MOCK_METHOD(E<std::vector<unsigned char>>, hashToBytes,
+                (const std::string& bytes), (const override));
 };
 
 class CryptoMock : public CryptoInterface
