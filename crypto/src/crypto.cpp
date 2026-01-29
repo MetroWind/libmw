@@ -386,9 +386,15 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
     return signature;
 }
 
-E<KeyPair> Crypto::generateEd25519KeyPair()
+E<KeyPair> Crypto::generateKeyPair(KeyType type)
 {
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+    int pkey_type = EVP_PKEY_ED25519;
+    if (type == KeyType::RSA)
+    {
+        pkey_type = EVP_PKEY_RSA;
+    }
+
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(pkey_type, nullptr);
     if (!ctx)
     {
         return std::unexpected(
@@ -401,6 +407,15 @@ E<KeyPair> Crypto::generateEd25519KeyPair()
     {
         return std::unexpected(
             runtimeError(getOpenSSLError("Failed to init keygen")));
+    }
+
+    if (type == KeyType::RSA)
+    {
+        if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0)
+        {
+            return std::unexpected(
+                runtimeError(getOpenSSLError("Failed to set RSA key bits")));
+        }
     }
 
     EVP_PKEY* pkey_raw = nullptr;

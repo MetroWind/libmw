@@ -33,7 +33,7 @@ public:
                  const std::string& data),
                 (override));
 
-    MOCK_METHOD(E<KeyPair>, generateEd25519KeyPair, (), (override));
+    MOCK_METHOD(E<KeyPair>, generateKeyPair, (KeyType type), (override));
 };
 
 } // namespace mw

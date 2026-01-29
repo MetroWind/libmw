@@ -63,6 +63,12 @@ enum class SignatureAlgorithm
     ED25519
 };
 
+enum class KeyType
+{
+    ED25519,
+    RSA
+};
+
 struct KeyPair
 {
     std::string public_key;
@@ -100,11 +106,12 @@ public:
                                                const std::string& key,
                                                const std::string& data) = 0;
 
-    /// @brief Generates a new ED25519 key pair.
+    /// @brief Generates a new key pair.
     ///
+    /// @param type The type of key pair to generate.
     /// @return A KeyPair containing the PEM encoded public and private keys, or
     /// an error if generation fails.
-    virtual E<KeyPair> generateEd25519KeyPair() = 0;
+    virtual E<KeyPair> generateKeyPair(KeyType type) = 0;
 };
 
 class Crypto : public CryptoInterface
@@ -118,7 +125,7 @@ public:
                                        const std::string& key,
                                        const std::string& data) override;
 
-    E<KeyPair> generateEd25519KeyPair() override;
+    E<KeyPair> generateKeyPair(KeyType type) override;
 };
 
 } // namespace mw

@@ -272,7 +272,7 @@ TEST(Signature, CanSignAndVerify)
 TEST(Signature, CanGenerateAndVerifyEd25519KeyPair)
 {
     mw::Crypto crypto;
-    ASSIGN_OR_FAIL(auto key_pair, crypto.generateEd25519KeyPair());
+    ASSIGN_OR_FAIL(auto key_pair, crypto.generateKeyPair(mw::KeyType::ED25519));
     EXPECT_FALSE(key_pair.public_key.empty());
     EXPECT_FALSE(key_pair.private_key.empty());
 
@@ -295,4 +295,25 @@ TEST(Signature, CanGenerateAndVerifyEd25519KeyPair)
                    crypto.verifySignature(mw::SignatureAlgorithm::ED25519,
                                        key_pair.public_key, signature, data));
     EXPECT_FALSE(invalid);
+}
+
+TEST(Signature, CanGenerateAndVerifyRSAKeyPair)
+{
+    mw::Crypto crypto;
+    ASSIGN_OR_FAIL(auto key_pair, crypto.generateKeyPair(mw::KeyType::RSA));
+    EXPECT_FALSE(key_pair.public_key.empty());
+    EXPECT_FALSE(key_pair.private_key.empty());
+
+    std::string data = "test message for generated RSA key";
+
+    // Sign using the generated private key (RSA_PSS_SHA512)
+    ASSIGN_OR_FAIL(auto signature,
+                   crypto.sign(mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                            key_pair.private_key, data));
+
+    // Verify using the generated public key
+    ASSIGN_OR_FAIL(bool valid,
+                   crypto.verifySignature(mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                                       key_pair.public_key, signature, data));
+    EXPECT_TRUE(valid);
 }
