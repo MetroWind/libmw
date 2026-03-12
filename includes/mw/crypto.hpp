@@ -155,6 +155,20 @@ public:
     virtual E<std::string> decrypt(EncryptionAlgorithm algo,
                                    const std::string& key,
                                    const std::string& encrypted_content) = 0;
+
+    /// @brief Derives a key using the Argon2id key derivation function.
+    ///
+    /// @param password The password to derive the key from.
+    /// @param salt The salt for key derivation.
+    /// @param iterations Time cost (number of iterations).
+    /// @param memory_kb Memory cost in kilobytes.
+    /// @param parallelism Number of threads/lanes.
+    /// @param key_length The length of the derived key in bytes.
+    /// @return The derived key as raw bytes, or an error if derivation failed.
+    virtual E<std::vector<unsigned char>> deriveKeyArgon2id(
+        const std::string& password, const std::string& salt,
+        uint32_t iterations, uint32_t memory_kb, uint32_t parallelism,
+        size_t key_length) = 0;
 };
 
 class Crypto : public CryptoInterface
@@ -175,6 +189,11 @@ public:
 
     E<std::string> decrypt(EncryptionAlgorithm algo, const std::string& key,
                            const std::string& encrypted_content) override;
+
+    E<std::vector<unsigned char>> deriveKeyArgon2id(
+        const std::string& password, const std::string& salt,
+        uint32_t iterations, uint32_t memory_kb, uint32_t parallelism,
+        size_t key_length) override;
 };
 
 } // namespace mw

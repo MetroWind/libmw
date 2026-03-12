@@ -45,6 +45,12 @@ public:
                 (EncryptionAlgorithm algo, const std::string& key,
                  const std::string& encrypted_content),
                 (override));
+
+    MOCK_METHOD(E<std::vector<unsigned char>>, deriveKeyArgon2id,
+                (const std::string& password, const std::string& salt,
+                 uint32_t iterations, uint32_t memory_kb, uint32_t parallelism,
+                 size_t key_length),
+                (override));
 };
 
 } // namespace mw

@@ -10,6 +10,9 @@
 #include <openssl/rsa.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
+#include <openssl/core_names.h>
 
 #include "crypto.hpp"
 #include "error.hpp"
@@ -23,6 +26,9 @@ using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using EVP_CIPHER_CTX_ptr =
     std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>;
+using EVP_KDF_ptr = std::unique_ptr<EVP_KDF, decltype(&EVP_KDF_free)>;
+using EVP_KDF_CTX_ptr =
+    std::unique_ptr<EVP_KDF_CTX, decltype(&EVP_KDF_CTX_free)>;
 
 namespace
 {
@@ -648,6 +654,51 @@ E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
         return std::unexpected(
             runtimeError(getOpenSSLError("Decryption/Authentication failed")));
     }
+}
+
+E<std::vector<unsigned char>> Crypto::deriveKeyArgon2id(
+    const std::string& password, const std::string& salt, uint32_t iterations,
+    uint32_t memory_kb, uint32_t parallelism, size_t key_length)
+{
+    ERR_clear_error();
+
+    EVP_KDF_ptr kdf(EVP_KDF_fetch(nullptr, "ARGON2ID", nullptr), EVP_KDF_free);
+    if(!kdf)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to fetch ARGON2ID KDF")));
+    }
+
+    EVP_KDF_CTX_ptr kctx(EVP_KDF_CTX_new(kdf.get()), EVP_KDF_CTX_free);
+    if(!kctx)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to create KDF context")));
+    }
+
+    std::vector<OSSL_PARAM> params;
+    params.push_back(OSSL_PARAM_construct_octet_string(
+        OSSL_KDF_PARAM_PASSWORD, const_cast<char*>(password.data()),
+        password.size()));
+    params.push_back(OSSL_PARAM_construct_octet_string(
+        OSSL_KDF_PARAM_SALT, const_cast<char*>(salt.data()), salt.size()));
+    params.push_back(OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER,
+                                                 &iterations));
+    params.push_back(OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_MEMCOST,
+                                                 &memory_kb));
+    params.push_back(OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_LANES,
+                                                 &parallelism));
+    params.push_back(OSSL_PARAM_construct_end());
+
+    std::vector<unsigned char> derived_key(key_length);
+    if(EVP_KDF_derive(kctx.get(), derived_key.data(), derived_key.size(),
+                       params.data()) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("KDF derivation failed")));
+    }
+
+    return derived_key;
 }
 
 } // namespace mw

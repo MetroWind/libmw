@@ -398,3 +398,86 @@ TEST(Encryption, ReturnsErrorOnEmptyCiphertext)
     auto result = crypto.decrypt(algo, key, "");
     EXPECT_FALSE(result);
 }
+
+TEST(KDF, Argon2idConsistency)
+{
+    mw::Crypto crypto;
+    std::string password = "password";
+    std::string salt = "somesalt12345678";
+    uint32_t iterations = 2;
+    uint32_t memory_kb = 4096;
+    uint32_t parallelism = 1;
+    size_t key_length = 32;
+
+    ASSIGN_OR_FAIL(auto key1, crypto.deriveKeyArgon2id(
+                                  password, salt, iterations, memory_kb,
+                                  parallelism, key_length));
+    ASSIGN_OR_FAIL(auto key2, crypto.deriveKeyArgon2id(
+                                  password, salt, iterations, memory_kb,
+                                  parallelism, key_length));
+
+    EXPECT_EQ(key1, key2);
+    EXPECT_EQ(key1.size(), key_length);
+}
+
+TEST(KDF, Argon2idDistinction)
+{
+    mw::Crypto crypto;
+    std::string password = "password";
+    std::string salt = "somesalt12345678";
+    uint32_t iterations = 2;
+    uint32_t memory_kb = 4096;
+    uint32_t parallelism = 1;
+    size_t key_length = 32;
+
+    ASSIGN_OR_FAIL(auto base_key, crypto.deriveKeyArgon2id(
+                                      password, salt, iterations, memory_kb,
+                                      parallelism, key_length));
+
+    // Different password
+    ASSIGN_OR_FAIL(auto diff_pass, crypto.deriveKeyArgon2id(
+                                       "different", salt, iterations, memory_kb,
+                                       parallelism, key_length));
+    EXPECT_NE(base_key, diff_pass);
+
+    // Different salt
+    ASSIGN_OR_FAIL(auto diff_salt, crypto.deriveKeyArgon2id(
+                                       password, "diffsalt12345678", iterations,
+                                       memory_kb, parallelism, key_length));
+    EXPECT_NE(base_key, diff_salt);
+
+    // Different iterations
+    ASSIGN_OR_FAIL(auto diff_iter, crypto.deriveKeyArgon2id(
+                                       password, salt, iterations + 1,
+                                       memory_kb, parallelism, key_length));
+    EXPECT_NE(base_key, diff_iter);
+
+    // Different memory
+    ASSIGN_OR_FAIL(auto diff_mem, crypto.deriveKeyArgon2id(
+                                      password, salt, iterations,
+                                      memory_kb * 2, parallelism, key_length));
+    EXPECT_NE(base_key, diff_mem);
+}
+
+TEST(KDF, Argon2idVariableLength)
+{
+    mw::Crypto crypto;
+    std::string password = "password";
+    std::string salt = "somesalt12345678";
+    uint32_t iterations = 2;
+    uint32_t memory_kb = 4096;
+    uint32_t parallelism = 1;
+
+    ASSIGN_OR_FAIL(auto key16, crypto.deriveKeyArgon2id(
+                                   password, salt, iterations, memory_kb,
+                                   parallelism, 16));
+    EXPECT_EQ(key16.size(), 16);
+
+    ASSIGN_OR_FAIL(auto key64, crypto.deriveKeyArgon2id(
+                                   password, salt, iterations, memory_kb,
+                                   parallelism, 64));
+    EXPECT_EQ(key64.size(), 64);
+
+    EXPECT_NE(std::vector<unsigned char>(key64.begin(), key64.begin() + 16),
+              key16);
+}
