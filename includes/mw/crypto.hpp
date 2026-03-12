@@ -81,6 +81,11 @@ enum class KeyType
     RSA
 };
 
+enum class EncryptionAlgorithm
+{
+    AES_256_GCM
+};
+
 struct KeyPair
 {
     std::string public_key;
@@ -124,6 +129,32 @@ public:
     /// @return A KeyPair containing the PEM encoded public and private keys, or
     /// an error if generation fails.
     virtual E<KeyPair> generateKeyPair(KeyType type) = 0;
+
+    /// @brief Encrypts the provided content using symmetric encryption.
+    ///
+    /// The resulting ciphertext for AES_256_GCM is formatted as:
+    /// [ 12-byte IV ] + [ Raw Ciphertext ] + [ 16-byte Auth Tag ]
+    ///
+    /// @param algo The symmetric encryption algorithm to use.
+    /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
+    /// @param clear_content The plaintext data to encrypt.
+    /// @return The encrypted ciphertext, or an error if encryption failed.
+    virtual E<std::string> encrypt(EncryptionAlgorithm algo,
+                                   const std::string& key,
+                                   const std::string& clear_content) = 0;
+
+    /// @brief Decrypts the provided ciphertext using symmetric encryption.
+    ///
+    /// The ciphertext for AES_256_GCM must be formatted as:
+    /// [ 12-byte IV ] + [ Raw Ciphertext ] + [ 16-byte Auth Tag ]
+    ///
+    /// @param algo The symmetric encryption algorithm to use.
+    /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
+    /// @param encrypted_content The ciphertext data to decrypt.
+    /// @return The decrypted plaintext data, or an error if decryption failed.
+    virtual E<std::string> decrypt(EncryptionAlgorithm algo,
+                                   const std::string& key,
+                                   const std::string& encrypted_content) = 0;
 };
 
 class Crypto : public CryptoInterface
@@ -138,6 +169,12 @@ public:
                                        const std::string& data) override;
 
     E<KeyPair> generateKeyPair(KeyType type) override;
+
+    E<std::string> encrypt(EncryptionAlgorithm algo, const std::string& key,
+                           const std::string& clear_content) override;
+
+    E<std::string> decrypt(EncryptionAlgorithm algo, const std::string& key,
+                           const std::string& encrypted_content) override;
 };
 
 } // namespace mw

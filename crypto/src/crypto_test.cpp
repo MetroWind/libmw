@@ -336,3 +336,65 @@ TEST(Signature, CanGenerateAndVerifyRSAKeyPair)
                                        key_pair.public_key, signature, data));
     EXPECT_TRUE(valid);
 }
+
+TEST(Encryption, CanEncryptAndDecrypt)
+{
+    mw::Crypto crypto;
+    std::string key(32, 'k');
+    std::string plaintext = "Secret message";
+    mw::EncryptionAlgorithm algo = mw::EncryptionAlgorithm::AES_256_GCM;
+
+    ASSIGN_OR_FAIL(std::string ciphertext,
+                   crypto.encrypt(algo, key, plaintext));
+    EXPECT_NE(ciphertext, plaintext);
+    EXPECT_GT(ciphertext.size(), plaintext.size());
+
+    ASSIGN_OR_FAIL(std::string decrypted,
+                   crypto.decrypt(algo, key, ciphertext));
+    EXPECT_EQ(decrypted, plaintext);
+}
+
+TEST(Encryption, ReturnsErrorOnInvalidKeyLength)
+{
+    mw::Crypto crypto;
+    std::string key(31, 'k');
+    std::string plaintext = "Secret message";
+    mw::EncryptionAlgorithm algo = mw::EncryptionAlgorithm::AES_256_GCM;
+
+    auto result = crypto.encrypt(algo, key, plaintext);
+    EXPECT_FALSE(result);
+
+    std::string valid_key(32, 'k');
+    ASSIGN_OR_FAIL(std::string ciphertext,
+                   crypto.encrypt(algo, valid_key, plaintext));
+
+    auto decrypt_result = crypto.decrypt(algo, key, ciphertext);
+    EXPECT_FALSE(decrypt_result);
+}
+
+TEST(Encryption, ReturnsErrorOnTamperedCiphertext)
+{
+    mw::Crypto crypto;
+    std::string key(32, 'k');
+    std::string plaintext = "Secret message";
+    mw::EncryptionAlgorithm algo = mw::EncryptionAlgorithm::AES_256_GCM;
+
+    ASSIGN_OR_FAIL(std::string ciphertext,
+                   crypto.encrypt(algo, key, plaintext));
+
+    // Tamper with the ciphertext (last byte of tag)
+    ciphertext.back() ^= 0xFF;
+
+    auto result = crypto.decrypt(algo, key, ciphertext);
+    EXPECT_FALSE(result);
+}
+
+TEST(Encryption, ReturnsErrorOnEmptyCiphertext)
+{
+    mw::Crypto crypto;
+    std::string key(32, 'k');
+    mw::EncryptionAlgorithm algo = mw::EncryptionAlgorithm::AES_256_GCM;
+
+    auto result = crypto.decrypt(algo, key, "");
+    EXPECT_FALSE(result);
+}

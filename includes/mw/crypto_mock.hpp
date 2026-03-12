@@ -35,6 +35,16 @@ public:
                 (override));
 
     MOCK_METHOD(E<KeyPair>, generateKeyPair, (KeyType type), (override));
+
+    MOCK_METHOD(E<std::string>, encrypt,
+                (EncryptionAlgorithm algo, const std::string& key,
+                 const std::string& clear_content),
+                (override));
+
+    MOCK_METHOD(E<std::string>, decrypt,
+                (EncryptionAlgorithm algo, const std::string& key,
+                 const std::string& encrypted_content),
+                (override));
 };
 
 } // namespace mw

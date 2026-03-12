@@ -9,6 +9,7 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <openssl/err.h>
+#include <openssl/rand.h>
 
 #include "crypto.hpp"
 #include "error.hpp"
@@ -20,9 +21,15 @@ namespace mw
 using EVP_PKEY_ptr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
+using EVP_CIPHER_CTX_ptr =
+    std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>;
 
 namespace
 {
+
+constexpr size_t GCM_IV_LEN = 12;
+constexpr size_t GCM_TAG_LEN = 16;
+constexpr size_t AES_256_KEY_LEN = 32;
 
 std::string getOpenSSLError(const std::string& msg)
 {
@@ -497,6 +504,150 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
     std::string private_key(priv_data, priv_len);
 
     return KeyPair{public_key, private_key};
+}
+
+E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
+                               const std::string& clear_content)
+{
+    if (algo != EncryptionAlgorithm::AES_256_GCM)
+    {
+        return std::unexpected(runtimeError("Unsupported encryption algorithm"));
+    }
+
+    if (key.size() != AES_256_KEY_LEN)
+    {
+        return std::unexpected(runtimeError("Invalid key length for AES-256"));
+    }
+
+    unsigned char iv[GCM_IV_LEN];
+    if (RAND_bytes(iv, GCM_IV_LEN) != 1)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to generate random IV")));
+    }
+
+    EVP_CIPHER_CTX_ptr ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    if (!ctx)
+    {
+        return std::unexpected(
+            runtimeError("Failed to create cipher context"));
+    }
+
+    if (EVP_EncryptInit_ex(
+            ctx.get(), EVP_aes_256_gcm(), nullptr,
+            reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_EncryptInit_ex failed")));
+    }
+
+    std::vector<unsigned char> ciphertext(clear_content.size() +
+                                          EVP_MAX_BLOCK_LENGTH);
+    int len = 0;
+    if (EVP_EncryptUpdate(
+            ctx.get(), ciphertext.data(), &len,
+            reinterpret_cast<const unsigned char*>(clear_content.data()),
+            static_cast<int>(clear_content.size())) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_EncryptUpdate failed")));
+    }
+    int ciphertext_len = len;
+
+    if (EVP_EncryptFinal_ex(ctx.get(), ciphertext.data() + len, &len) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_EncryptFinal_ex failed")));
+    }
+    ciphertext_len += len;
+    ciphertext.resize(ciphertext_len);
+
+    unsigned char tag[GCM_TAG_LEN];
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, GCM_TAG_LEN,
+                            tag) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to get GCM tag")));
+    }
+
+    std::string result;
+    result.reserve(GCM_IV_LEN + ciphertext_len + GCM_TAG_LEN);
+    result.append(reinterpret_cast<char*>(iv), GCM_IV_LEN);
+    result.append(reinterpret_cast<char*>(ciphertext.data()), ciphertext_len);
+    result.append(reinterpret_cast<char*>(tag), GCM_TAG_LEN);
+
+    return result;
+}
+
+E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
+                               const std::string& encrypted_content)
+{
+    if (algo != EncryptionAlgorithm::AES_256_GCM)
+    {
+        return std::unexpected(runtimeError("Unsupported encryption algorithm"));
+    }
+
+    if (key.size() != AES_256_KEY_LEN)
+    {
+        return std::unexpected(runtimeError("Invalid key length for AES-256"));
+    }
+
+    if (encrypted_content.size() < GCM_IV_LEN + GCM_TAG_LEN)
+    {
+        return std::unexpected(runtimeError("Ciphertext too short"));
+    }
+
+    const unsigned char* iv =
+        reinterpret_cast<const unsigned char*>(encrypted_content.data());
+    const unsigned char* ciphertext = iv + GCM_IV_LEN;
+    size_t ciphertext_len = encrypted_content.size() - GCM_IV_LEN - GCM_TAG_LEN;
+    const unsigned char* tag = ciphertext + ciphertext_len;
+
+    EVP_CIPHER_CTX_ptr ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    if (!ctx)
+    {
+        return std::unexpected(
+            runtimeError("Failed to create cipher context"));
+    }
+
+    if (EVP_DecryptInit_ex(
+            ctx.get(), EVP_aes_256_gcm(), nullptr,
+            reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_DecryptInit_ex failed")));
+    }
+
+    std::vector<unsigned char> plaintext(ciphertext_len + EVP_MAX_BLOCK_LENGTH);
+    int len = 0;
+    if (EVP_DecryptUpdate(ctx.get(), plaintext.data(), &len, ciphertext,
+                          static_cast<int>(ciphertext_len)) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("EVP_DecryptUpdate failed")));
+    }
+    int plaintext_len = len;
+
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, GCM_TAG_LEN,
+                            const_cast<unsigned char*>(tag)) <= 0)
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Failed to set GCM tag")));
+    }
+
+    int ret = EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + len, &len);
+    if (ret > 0)
+    {
+        plaintext_len += len;
+        plaintext.resize(plaintext_len);
+        return std::string(reinterpret_cast<char*>(plaintext.data()),
+                           plaintext_len);
+    }
+    else
+    {
+        return std::unexpected(
+            runtimeError(getOpenSSLError("Decryption/Authentication failed")));
+    }
 }
 
 } // namespace mw
