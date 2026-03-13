@@ -62,7 +62,8 @@ if(LIBMW_BUILD_TESTS)
   add_executable(mw-url_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
   set_property(TARGET mw-url_test PROPERTY CXX_STANDARD 23)
   set_property(TARGET mw-url_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
-  target_compile_options(mw-url_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(mw-url_test PRIVATE -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g -O1 -Wno-error=maybe-uninitialized)
+  target_link_options(mw-url_test PRIVATE -fsanitize=address,undefined)
   target_include_directories(mw-url_test PRIVATE
     ${INCLUDES}
     ${googletest_SOURCE_DIR}/googletest/include

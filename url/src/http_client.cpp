@@ -113,8 +113,10 @@ E<const HTTPResponse*> HTTPSession::get(const HTTPRequest& req)
 {
     prepareForNewRequest();
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
-    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headersFromReq(req));
+    curl_slist* headers = headersFromReq(req);
+    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
     CURLcode code = curl_easy_perform(handle);
+    curl_slist_free_all(headers);
     if(code == CURLE_OK)
     {
         return &res;
@@ -126,11 +128,13 @@ E<const HTTPResponse*> HTTPSession::post(const HTTPRequest& req)
 {
     prepareForNewRequest();
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
-    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headersFromReq(req));
+    curl_slist* headers = headersFromReq(req);
+    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(handle, CURLOPT_POSTFIELDS, req.request_data.data());
     curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, req.request_data.size());
 
     CURLcode code = curl_easy_perform(handle);
+    curl_slist_free_all(headers);
     if(code == CURLE_OK)
     {
         return &res;
