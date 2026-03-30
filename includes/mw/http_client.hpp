@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <cstddef>
-#include <span>
+#include <chrono>
 #include <unordered_map>
 #include <optional>
 
@@ -51,6 +51,22 @@ public:
     }
     virtual E<const HTTPResponse*> get(const HTTPRequest& req) = 0;
     virtual E<const HTTPResponse*> post(const HTTPRequest& req) = 0;
+
+    // Return the timeout for data transfer. Default is no timeout.
+    virtual std::chrono::duration<long> transferTimeout() const = 0;
+    virtual E<void> transferTimeout(std::chrono::duration<long>) = 0;
+    // Return the connection timeout. Default is 60 seconds.
+    virtual std::chrono::duration<long> connectionTimeout() const = 0;
+    virtual E<void> connectionTimeout(std::chrono::duration<long>) = 0;
+
+    // Max download size.
+    virtual long maxSize() const = 0;
+    virtual E<void> maxSize(long) = 0;
+
+    // Max number of redirections to follow. Zero means not following
+    // redirections.
+    virtual long maxRedirections() const = 0;
+    virtual E<void> maxRedirections(long) = 0;
 };
 
 // This class models an HTTP client using libcurl. Threads should not
@@ -78,10 +94,24 @@ public:
     E<const HTTPResponse*> get(const HTTPRequest& req) override;
     E<const HTTPResponse*> post(const HTTPRequest& req) override;
 
+    std::chrono::duration<long> transferTimeout() const override;
+    E<void> transferTimeout(std::chrono::duration<long> t) override;
+    std::chrono::duration<long> connectionTimeout() const override;
+    E<void> connectionTimeout(std::chrono::duration<long> t) override;
+    long maxSize() const override { return max_size; }
+    // Cannot exceed 2G.
+    E<void> maxSize(long) override;
+    long maxRedirections() const override { return max_redirections; }
+    E<void> maxRedirections(long) override;
+
 private:
     CURL* handle = nullptr;
     HTTPResponse res;
     std::optional<std::string> socket = std::nullopt;
+    long transfer_timeout_s = 0;
+    long connection_timeout_s = 60;
+    long max_size = 2147483648;
+    long max_redirections = 0;
 
     void prepareForNewRequest();
 

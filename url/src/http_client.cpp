@@ -61,6 +61,7 @@ HTTPSession::HTTPSession()
 {
     handle = curl_easy_init();
     res.payload.reserve(CURL_MAX_WRITE_SIZE);
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, CURLFOLLOW_ALL);
 }
 
 HTTPSession::HTTPSession(std::string_view socket_path)
@@ -140,6 +141,60 @@ E<const HTTPResponse*> HTTPSession::post(const HTTPRequest& req)
         return &res;
     }
     return std::unexpected(runtimeError(curl_easy_strerror(code)));
+}
+
+std::chrono::duration<long> HTTPSession::transferTimeout() const
+{
+    return std::chrono::duration<long>(transfer_timeout_s);
+}
+
+E<void> HTTPSession::transferTimeout(std::chrono::duration<long> t)
+{
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_TIMEOUT, t.count());
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    transfer_timeout_s = t.count();
+    return {};
+}
+
+std::chrono::duration<long> HTTPSession::connectionTimeout() const
+{
+    return std::chrono::duration<long>(connection_timeout_s);
+}
+
+E<void> HTTPSession::connectionTimeout(std::chrono::duration<long> t)
+{
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, t.count());
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    connection_timeout_s = t.count();
+    return {};
+}
+
+E<void> HTTPSession::maxSize(long s)
+{
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_MAXFILESIZE, s);
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    max_size = s;
+    return {};
+}
+
+E<void> HTTPSession::maxRedirections(long n)
+{
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_MAXREDIRS, n);
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    max_redirections = n;
+    return {};
 }
 
 size_t HTTPSession::writeResponse(char *ptr, size_t size, size_t nmemb,

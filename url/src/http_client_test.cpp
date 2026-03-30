@@ -138,4 +138,30 @@ TEST(HTTPSession, CanPost)
     t.join();
 }
 
+TEST(HTTPSession, Options)
+{
+    using namespace std::chrono_literals;
+
+    HTTPSession s;
+
+    // Default values
+    EXPECT_EQ(s.transferTimeout().count(), 0);
+    EXPECT_EQ(s.connectionTimeout().count(), 60);
+    EXPECT_EQ(s.maxSize(), 2147483648);
+    EXPECT_EQ(s.maxRedirections(), 0);
+
+    // Set and get
+    ASSERT_TRUE(s.transferTimeout(10s).has_value());
+    EXPECT_EQ(s.transferTimeout().count(), 10);
+
+    ASSERT_TRUE(s.connectionTimeout(30s).has_value());
+    EXPECT_EQ(s.connectionTimeout().count(), 30);
+
+    ASSERT_TRUE(s.maxSize(1024).has_value());
+    EXPECT_EQ(s.maxSize(), 1024);
+
+    ASSERT_TRUE(s.maxRedirections(5).has_value());
+    EXPECT_EQ(s.maxRedirections(), 5);
+}
+
 } // namespace mw
