@@ -283,6 +283,36 @@ URL& URL::zoneid(const char* value)
     return *this;
 }
 
+E<URL> URL::resolve(const char* ref) const
+{
+    if(url == nullptr)
+    {
+        return std::unexpected(runtimeError("Base URL is not initialized"));
+    }
+    // RFC 3986 §5.2.2: an empty reference resolves to the base URI.
+    if(ref == nullptr || *ref == '\0')
+    {
+        return E<URL>{std::in_place, *this};
+    }
+    URL result;
+    result.url = curl_url_dup(url);
+    if(result.url == nullptr)
+    {
+        return std::unexpected(runtimeError("Failed to duplicate base URL"));
+    }
+    if(curl_url_set(result.url, CURLUPART_URL, ref, 0) != CURLUE_OK)
+    {
+        return std::unexpected(
+            runtimeError(std::string("Cannot resolve URL reference: ") + ref));
+    }
+    return E<URL>{std::in_place, std::move(result)};
+}
+
+E<URL> URL::resolve(const std::string& ref) const
+{
+    return resolve(ref.c_str());
+}
+
 URL& URL::appendPath(std::string_view appendant)
 {
     if(appendant.empty()) return *this;

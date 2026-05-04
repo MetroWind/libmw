@@ -51,6 +51,14 @@ public:
     // This handles trailing and leading slashes correctly.
     URL& appendPath(std::string_view path);
 
+    // Resolve “ref” as a URI reference against this URL as the base
+    // URI, per RFC 3986 §5. “ref” may be absolute, protocol-relative,
+    // an absolute path, a relative path, or empty (which resolves to
+    // the base URI itself). Returns the resolved URL, or an error if
+    // either URL cannot be parsed.
+    E<URL> resolve(const char* ref) const;
+    E<URL> resolve(const std::string& ref) const;
+
     // Whether this object contains a valid URL
     bool valid() const { return url != nullptr; }
 
