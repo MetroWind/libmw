@@ -202,9 +202,96 @@ size_t HTTPSession::writeResponse(char *ptr, size_t size, size_t nmemb,
 {
     size_t realsize = size * nmemb;
     HTTPResponse* b = reinterpret_cast<HTTPResponse*>(res);
-    b->payload.resize(realsize);
-    std::memcpy(b->payload.data(), ptr, realsize);
+    // libcurl invokes this once per received chunk, so we must
+    // append rather than overwrite. Otherwise responses larger than
+    // CURL_MAX_WRITE_SIZE are silently truncated.
+    size_t old_size = b->payload.size();
+    b->payload.resize(old_size + realsize);
+    std::memcpy(b->payload.data() + old_size, ptr, realsize);
     return realsize;
+}
+
+namespace
+{
+
+struct StreamCtx
+{
+    ChunkCallback* cb;
+    bool aborted;
+};
+
+} // namespace
+
+size_t HTTPSession::writeChunk(char *ptr, size_t size, size_t nmemb,
+                               void *userdata)
+{
+    size_t realsize = size * nmemb;
+    StreamCtx* ctx = reinterpret_cast<StreamCtx*>(userdata);
+    std::span<const std::byte> chunk(
+        reinterpret_cast<const std::byte*>(ptr), realsize);
+    bool keep_going = (*ctx->cb)(chunk);
+    if(!keep_going)
+    {
+        ctx->aborted = true;
+        // Returning anything other than realsize signals an error to
+        // libcurl, which surfaces as CURLE_WRITE_ERROR.
+        return realsize == 0 ? 1 : realsize - 1;
+    }
+    return realsize;
+}
+
+E<HTTPResponse> HTTPSession::getStream(const HTTPRequest& req,
+                                       ChunkCallback on_chunk)
+{
+    prepareForNewRequest();
+    StreamCtx ctx{&on_chunk, false};
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, HTTPSession::writeChunk);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &ctx);
+    curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
+    curl_slist* headers = headersFromReq(req);
+    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+    CURLcode code = curl_easy_perform(handle);
+    curl_slist_free_all(headers);
+    if(code == CURLE_OK)
+    {
+        HTTPResponse out;
+        out.status = res.status;
+        out.header = res.header;
+        return out;
+    }
+    if(code == CURLE_WRITE_ERROR && ctx.aborted)
+    {
+        return std::unexpected(runtimeError(HTTP_ABORTED_BY_CALLER));
+    }
+    return std::unexpected(runtimeError(curl_easy_strerror(code)));
+}
+
+E<HTTPResponse> HTTPSession::postStream(const HTTPRequest& req,
+                                        ChunkCallback on_chunk)
+{
+    prepareForNewRequest();
+    StreamCtx ctx{&on_chunk, false};
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, HTTPSession::writeChunk);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &ctx);
+    curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
+    curl_slist* headers = headersFromReq(req);
+    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(handle, CURLOPT_POSTFIELDS, req.request_data.data());
+    curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, req.request_data.size());
+    CURLcode code = curl_easy_perform(handle);
+    curl_slist_free_all(headers);
+    if(code == CURLE_OK)
+    {
+        HTTPResponse out;
+        out.status = res.status;
+        out.header = res.header;
+        return out;
+    }
+    if(code == CURLE_WRITE_ERROR && ctx.aborted)
+    {
+        return std::unexpected(runtimeError(HTTP_ABORTED_BY_CALLER));
+    }
+    return std::unexpected(runtimeError(curl_easy_strerror(code)));
 }
 
 size_t HTTPSession::writeHeaders(char *buffer, [[maybe_unused]] size_t size,

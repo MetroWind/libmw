@@ -5,6 +5,8 @@
 #include <vector>
 #include <cstddef>
 #include <chrono>
+#include <functional>
+#include <span>
 #include <unordered_map>
 #include <optional>
 
@@ -14,6 +16,19 @@
 
 namespace mw
 {
+
+// Callback invoked for each chunk of body data received during a
+// streaming transfer. Return true to continue the transfer, or false
+// to abort it. When aborted the streaming call returns a RuntimeError
+// whose message equals HTTP_ABORTED_BY_CALLER.
+using ChunkCallback =
+    std::function<bool(std::span<const std::byte> chunk)>;
+
+// Sentinel message used by the streaming variants when the user
+// callback returns false. Tests and callers can compare against this
+// to detect the "aborted by caller" case.
+inline constexpr std::string_view HTTP_ABORTED_BY_CALLER =
+    "transfer aborted by caller";
 
 struct HTTPRequest
 {
@@ -51,6 +66,16 @@ public:
     }
     virtual E<const HTTPResponse*> get(const HTTPRequest& req) = 0;
     virtual E<const HTTPResponse*> post(const HTTPRequest& req) = 0;
+
+    // Streaming variants. The callback is invoked synchronously on
+    // the calling thread for each body chunk as it arrives. Returning
+    // false aborts the transfer. The returned HTTPResponse contains
+    // the status and headers but its payload is left empty (the
+    // caller consumed the body via on_chunk).
+    virtual E<HTTPResponse> getStream(const HTTPRequest& req,
+                                      ChunkCallback on_chunk) = 0;
+    virtual E<HTTPResponse> postStream(const HTTPRequest& req,
+                                       ChunkCallback on_chunk) = 0;
 
     // Return the timeout for data transfer. Default is no timeout.
     virtual std::chrono::duration<long> transferTimeout() const = 0;
@@ -94,6 +119,14 @@ public:
     E<const HTTPResponse*> get(const HTTPRequest& req) override;
     E<const HTTPResponse*> post(const HTTPRequest& req) override;
 
+    // Streaming variants. See HTTPSessionInterface for semantics.
+    // The body is delivered via on_chunk; HTTPResponse::payload is
+    // not populated.
+    E<HTTPResponse> getStream(const HTTPRequest& req,
+                              ChunkCallback on_chunk) override;
+    E<HTTPResponse> postStream(const HTTPRequest& req,
+                               ChunkCallback on_chunk) override;
+
     std::chrono::duration<long> transferTimeout() const override;
     E<void> transferTimeout(std::chrono::duration<long> t) override;
     std::chrono::duration<long> connectionTimeout() const override;
@@ -119,6 +152,8 @@ private:
                                 void *res_buffer);
     static size_t writeHeaders(char *buffer, size_t size, size_t nitems,
                                void *userdata);
+    static size_t writeChunk(char *ptr, size_t size, size_t nmemb,
+                             void *userdata);
 };
 
 } // namespace mw
