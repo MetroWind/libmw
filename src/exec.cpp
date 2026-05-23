@@ -55,11 +55,11 @@ Pipe::~Pipe()
 {
     if(!input_closed)
     {
-        closeInput();
+        std::ignore = closeInput();
     }
     if(!output_closed)
     {
-        closeOutput();
+        std::ignore = closeOutput();
     }
 }
 
