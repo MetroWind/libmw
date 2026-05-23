@@ -166,8 +166,8 @@ E<Process> Process::exec(
         argv.push_back(nullptr);
         if(execvp(argv[0], reinterpret_cast<char* const*>(argv.data())) < 0)
         {
-            proc.comm.write("FAIL");
-            proc.comm.closeInput();
+            std::ignore = proc.comm.write("FAIL");
+            std::ignore = proc.comm.closeInput();
             exit(1);
         }
         std::unreachable();
@@ -180,9 +180,9 @@ E<Process> Process::exec(
     }
     else if(std::holds_alternative<std::string_view>(input))
     {
-        input_pipe.closeOutput();
-        input_pipe.write(std::get<std::string_view>(input));
-        input_pipe.closeInput();
+        DO_OR_RETURN(input_pipe.closeOutput());
+        DO_OR_RETURN(input_pipe.write(std::get<std::string_view>(input)));
+        DO_OR_RETURN(input_pipe.closeInput());
     }
 
     if(std::holds_alternative<Pipe*>(output))
