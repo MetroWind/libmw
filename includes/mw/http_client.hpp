@@ -4,11 +4,13 @@
 #include <string_view>
 #include <vector>
 #include <cstddef>
+#include <cstdint>
 #include <chrono>
 #include <functional>
 #include <span>
 #include <unordered_map>
 #include <optional>
+#include <utility>
 
 #include <curl/curl.h>
 
@@ -29,6 +31,50 @@ using ChunkCallback =
 // to detect the "aborted by caller" case.
 inline constexpr std::string_view HTTP_ABORTED_BY_CALLER =
     "transfer aborted by caller";
+
+// Sentinel message used when a connection is refused by the address
+// filter (see AddressPredicate). Tests and callers can compare against
+// this to distinguish an SSRF/policy block from an ordinary network
+// error.
+inline constexpr std::string_view HTTP_BLOCKED_BY_POLICY =
+    "connection blocked by address policy";
+
+// Address family of a resolved destination, kept independent of
+// <sys/socket.h> so callers do not need to include system headers.
+enum class AddressFamily
+{
+    IPV4,
+    IPV6,
+};
+
+// A resolved destination address, as seen right before a connection is
+// made (after the library's own DNS resolution). This is what the
+// address filter inspects.
+//
+// IPv4-mapped IPv6 addresses (e.g. "::ffff:127.0.0.1") are normalized
+// to IPV4, with `address` holding the four embedded IPv4 bytes, so they
+// cannot be used to bypass an IPv4-based blocklist.
+struct SockAddr
+{
+    AddressFamily family = AddressFamily::IPV4;
+    // Network-order address bytes: 4 bytes for IPV4, 16 for IPV6.
+    std::vector<std::uint8_t> address;
+    std::uint16_t port = 0;
+};
+
+// Predicate consulted for every connection the client is about to make,
+// including each redirect hop, with the exact address it will connect
+// to. Return true to allow the connection or false to block it. When a
+// connection is blocked, the request fails with a RuntimeError whose
+// message equals HTTP_BLOCKED_BY_POLICY.
+//
+// Because it sees the precise address the client resolved, there is no
+// separate resolve step in the caller and therefore no DNS-rebinding
+// (TOCTOU) window.
+//
+// The predicate runs inside the transfer; keep it cheap and
+// non-throwing.
+using AddressPredicate = std::function<bool(const SockAddr&)>;
 
 struct HTTPRequest
 {
@@ -88,10 +134,29 @@ public:
     virtual long maxSize() const = 0;
     virtual E<void> maxSize(long) = 0;
 
-    // Max number of redirections to follow. Zero means not following
-    // redirections.
+    // Max number of redirections to follow, when redirect following is
+    // enabled (see followRedirects()).
     virtual long maxRedirections() const = 0;
     virtual E<void> maxRedirections(long) = 0;
+
+    // Whether to follow HTTP redirects. Default is true.
+    virtual bool followRedirects() const = 0;
+    virtual void followRedirects(bool) = 0;
+
+    // Address filter consulted before each connection (including each
+    // redirect hop). An empty predicate (the default) allows all
+    // addresses. See AddressPredicate. The predicate must outlive the
+    // requests it is used for.
+    virtual const AddressPredicate& addressFilter() const = 0;
+    virtual void addressFilter(AddressPredicate) = 0;
+
+    // Restrict the protocols the client may use, as a comma-separated
+    // list (e.g. "https" or "http,https"). An empty string (the
+    // default) leaves the library default in place. `allowedProtocols`
+    // applies to the initial request; `allowedRedirectProtocols`
+    // applies to protocols a redirect may switch to.
+    virtual E<void> allowedProtocols(std::string_view protocols) = 0;
+    virtual E<void> allowedRedirectProtocols(std::string_view protocols) = 0;
 };
 
 // This class models an HTTP client using libcurl. Threads should not
@@ -137,6 +202,21 @@ public:
     long maxRedirections() const override { return max_redirections; }
     E<void> maxRedirections(long) override;
 
+    bool followRedirects() const override { return follow_redirects; }
+    void followRedirects(bool) override;
+
+    const AddressPredicate& addressFilter() const override
+    {
+        return addr_filter;
+    }
+    void addressFilter(AddressPredicate pred) override
+    {
+        addr_filter = std::move(pred);
+    }
+
+    E<void> allowedProtocols(std::string_view protocols) override;
+    E<void> allowedRedirectProtocols(std::string_view protocols) override;
+
 private:
     CURL* handle = nullptr;
     HTTPResponse res;
@@ -145,8 +225,17 @@ private:
     long connection_timeout_s = 60;
     long max_size = 2147483648;
     long max_redirections = 0;
+    bool follow_redirects = true;
+    AddressPredicate addr_filter;
+    std::string allowed_protocols;
+    std::string allowed_redir_protocols;
 
     void prepareForNewRequest();
+    // Install the open-socket callback for the current request. `ctx`
+    // points to a per-request context (an opaque OpenSocketCtx) whose
+    // `blocked` flag is set if the address filter refuses a connection.
+    // Takes void* to keep this header free of libcurl socket types.
+    void installAddressFilter(void* ctx);
 
     static size_t writeResponse(char *ptr, size_t size, size_t nmemb,
                                 void *res_buffer);

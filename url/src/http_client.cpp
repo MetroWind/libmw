@@ -13,12 +13,93 @@
 #include <vector>
 
 #include <curl/curl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "http_client.hpp"
 #include "error.hpp"
 
 namespace mw
 {
+
+namespace
+{
+
+// Per-request state for the open-socket callback. Lives on the stack of
+// the request method that installs it.
+struct OpenSocketCtx
+{
+    // Null means no filtering (allow every connection).
+    const AddressPredicate* filter;
+    // Set by the callback when the filter refuses a connection.
+    bool blocked;
+};
+
+// Translate the address libcurl is about to connect to into the public
+// SockAddr, normalizing IPv4-mapped IPv6 to plain IPv4 so it cannot be
+// used to slip past an IPv4 blocklist. Returns false for address
+// families we do not understand.
+bool toSockAddr(const struct curl_sockaddr* address, SockAddr& out)
+{
+    const struct sockaddr* addr = &address->addr;
+    if(addr->sa_family == AF_INET)
+    {
+        const struct sockaddr_in* in =
+            reinterpret_cast<const struct sockaddr_in*>(addr);
+        out.family = AddressFamily::IPV4;
+        out.address.resize(4);
+        std::memcpy(out.address.data(), &in->sin_addr.s_addr, 4);
+        out.port = ntohs(in->sin_port);
+        return true;
+    }
+    if(addr->sa_family == AF_INET6)
+    {
+        const struct sockaddr_in6* in6 =
+            reinterpret_cast<const struct sockaddr_in6*>(addr);
+        const std::uint8_t* bytes =
+            reinterpret_cast<const std::uint8_t*>(&in6->sin6_addr);
+        out.port = ntohs(in6->sin6_port);
+        // ::ffff:a.b.c.d -> normalize to IPv4.
+        static constexpr std::uint8_t V4_MAPPED_PREFIX[12] =
+            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+        if(std::memcmp(bytes, V4_MAPPED_PREFIX, 12) == 0)
+        {
+            out.family = AddressFamily::IPV4;
+            out.address.assign(bytes + 12, bytes + 16);
+        }
+        else
+        {
+            out.family = AddressFamily::IPV6;
+            out.address.assign(bytes, bytes + 16);
+        }
+        return true;
+    }
+    return false;
+}
+
+// CURLOPT_OPENSOCKETFUNCTION. libcurl calls this after its own DNS
+// resolution with the exact address it is about to connect to, for
+// every connection including each redirect hop. Returning
+// CURL_SOCKET_BAD aborts the connection. Must not throw.
+curl_socket_t openSocketCallback(void* clientp, curlsocktype purpose,
+                                 struct curl_sockaddr* address)
+{
+    OpenSocketCtx* ctx = static_cast<OpenSocketCtx*>(clientp);
+    if(purpose == CURLSOCKTYPE_IPCXN && ctx != nullptr &&
+       ctx->filter != nullptr && *ctx->filter)
+    {
+        SockAddr sa;
+        if(toSockAddr(address, sa) && !(*ctx->filter)(sa))
+        {
+            ctx->blocked = true;
+            return CURL_SOCKET_BAD;
+        }
+    }
+    return ::socket(address->family, address->socktype, address->protocol);
+}
+
+} // namespace
 
 HTTPRequest& HTTPRequest::setPayload(std::string_view data)
 {
@@ -61,7 +142,6 @@ HTTPSession::HTTPSession()
 {
     handle = curl_easy_init();
     res.payload.reserve(CURL_MAX_WRITE_SIZE);
-    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, CURLFOLLOW_ALL);
 }
 
 HTTPSession::HTTPSession(std::string_view socket_path)
@@ -81,12 +161,22 @@ HTTPSession::~HTTPSession()
 HTTPSession::HTTPSession(const HTTPSession& other)
 {
     handle = curl_easy_duphandle(other.handle);
-
+    socket = other.socket;
+    transfer_timeout_s = other.transfer_timeout_s;
+    connection_timeout_s = other.connection_timeout_s;
+    max_size = other.max_size;
+    max_redirections = other.max_redirections;
+    follow_redirects = other.follow_redirects;
+    addr_filter = other.addr_filter;
+    allowed_protocols = other.allowed_protocols;
+    allowed_redir_protocols = other.allowed_redir_protocols;
 }
 
 void HTTPSession::prepareForNewRequest()
 {
     res.clear();
+    // curl_easy_reset() clears every option, so the session settings
+    // below must be re-applied for each request.
     curl_easy_reset(handle);
     if(socket.has_value())
     {
@@ -97,6 +187,37 @@ void HTTPSession::prepareForNewRequest()
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &res);
     curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, HTTPSession::writeHeaders);
     curl_easy_setopt(handle, CURLOPT_HEADERDATA, &res);
+
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, transfer_timeout_s);
+    curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, connection_timeout_s);
+    curl_easy_setopt(handle, CURLOPT_MAXFILESIZE, max_size);
+
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION,
+                     follow_redirects ? 1L : 0L);
+    curl_easy_setopt(handle, CURLOPT_MAXREDIRS, max_redirections);
+
+    if(!allowed_protocols.empty())
+    {
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR,
+                         allowed_protocols.c_str());
+    }
+    if(!allowed_redir_protocols.empty())
+    {
+        curl_easy_setopt(handle, CURLOPT_REDIR_PROTOCOLS_STR,
+                         allowed_redir_protocols.c_str());
+    }
+}
+
+void HTTPSession::installAddressFilter(void* ctx)
+{
+    // Only intercept socket creation when a filter is actually set, so
+    // unfiltered sessions keep libcurl's default socket handling.
+    if(!addr_filter)
+    {
+        return;
+    }
+    curl_easy_setopt(handle, CURLOPT_OPENSOCKETFUNCTION, openSocketCallback);
+    curl_easy_setopt(handle, CURLOPT_OPENSOCKETDATA, ctx);
 }
 
 curl_slist* headersFromReq(const HTTPRequest& req)
@@ -113,6 +234,8 @@ curl_slist* headersFromReq(const HTTPRequest& req)
 E<const HTTPResponse*> HTTPSession::get(const HTTPRequest& req)
 {
     prepareForNewRequest();
+    OpenSocketCtx sock_ctx{addr_filter ? &addr_filter : nullptr, false};
+    installAddressFilter(&sock_ctx);
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
     curl_slist* headers = headersFromReq(req);
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
@@ -122,12 +245,18 @@ E<const HTTPResponse*> HTTPSession::get(const HTTPRequest& req)
     {
         return &res;
     }
+    if(sock_ctx.blocked)
+    {
+        return std::unexpected(policyError(HTTP_BLOCKED_BY_POLICY));
+    }
     return std::unexpected(runtimeError(curl_easy_strerror(code)));
 }
 
 E<const HTTPResponse*> HTTPSession::post(const HTTPRequest& req)
 {
     prepareForNewRequest();
+    OpenSocketCtx sock_ctx{addr_filter ? &addr_filter : nullptr, false};
+    installAddressFilter(&sock_ctx);
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
     curl_slist* headers = headersFromReq(req);
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
@@ -139,6 +268,10 @@ E<const HTTPResponse*> HTTPSession::post(const HTTPRequest& req)
     if(code == CURLE_OK)
     {
         return &res;
+    }
+    if(sock_ctx.blocked)
+    {
+        return std::unexpected(policyError(HTTP_BLOCKED_BY_POLICY));
     }
     return std::unexpected(runtimeError(curl_easy_strerror(code)));
 }
@@ -197,6 +330,37 @@ E<void> HTTPSession::maxRedirections(long n)
     return {};
 }
 
+void HTTPSession::followRedirects(bool follow)
+{
+    follow_redirects = follow;
+}
+
+E<void> HTTPSession::allowedProtocols(std::string_view protocols)
+{
+    std::string value(protocols);
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR,
+                                     value.c_str());
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    allowed_protocols = std::move(value);
+    return {};
+}
+
+E<void> HTTPSession::allowedRedirectProtocols(std::string_view protocols)
+{
+    std::string value(protocols);
+    CURLcode code = curl_easy_setopt(handle, CURLOPT_REDIR_PROTOCOLS_STR,
+                                     value.c_str());
+    if(code != CURLE_OK)
+    {
+        return std::unexpected(runtimeError(curl_easy_strerror(code)));
+    }
+    allowed_redir_protocols = std::move(value);
+    return {};
+}
+
 size_t HTTPSession::writeResponse(char *ptr, size_t size, size_t nmemb,
                                   void *res)
 {
@@ -245,6 +409,8 @@ E<HTTPResponse> HTTPSession::getStream(const HTTPRequest& req,
 {
     prepareForNewRequest();
     StreamCtx ctx{&on_chunk, false};
+    OpenSocketCtx sock_ctx{addr_filter ? &addr_filter : nullptr, false};
+    installAddressFilter(&sock_ctx);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, HTTPSession::writeChunk);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
@@ -263,6 +429,10 @@ E<HTTPResponse> HTTPSession::getStream(const HTTPRequest& req,
     {
         return std::unexpected(runtimeError(HTTP_ABORTED_BY_CALLER));
     }
+    if(sock_ctx.blocked)
+    {
+        return std::unexpected(policyError(HTTP_BLOCKED_BY_POLICY));
+    }
     return std::unexpected(runtimeError(curl_easy_strerror(code)));
 }
 
@@ -271,6 +441,8 @@ E<HTTPResponse> HTTPSession::postStream(const HTTPRequest& req,
 {
     prepareForNewRequest();
     StreamCtx ctx{&on_chunk, false};
+    OpenSocketCtx sock_ctx{addr_filter ? &addr_filter : nullptr, false};
+    installAddressFilter(&sock_ctx);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, HTTPSession::writeChunk);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(handle, CURLOPT_URL, req.url.c_str());
@@ -290,6 +462,10 @@ E<HTTPResponse> HTTPSession::postStream(const HTTPRequest& req,
     if(code == CURLE_WRITE_ERROR && ctx.aborted)
     {
         return std::unexpected(runtimeError(HTTP_ABORTED_BY_CALLER));
+    }
+    if(sock_ctx.blocked)
+    {
+        return std::unexpected(policyError(HTTP_BLOCKED_BY_POLICY));
     }
     return std::unexpected(runtimeError(curl_easy_strerror(code)));
 }

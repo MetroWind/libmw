@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -61,6 +62,16 @@ public:
 
     MOCK_METHOD(long, maxRedirections, (), (const, override));
     MOCK_METHOD(E<void>, maxRedirections, (long), (override));
+
+    MOCK_METHOD(bool, followRedirects, (), (const, override));
+    MOCK_METHOD(void, followRedirects, (bool), (override));
+
+    MOCK_METHOD(const AddressPredicate&, addressFilter, (), (const, override));
+    MOCK_METHOD(void, addressFilter, (AddressPredicate), (override));
+
+    MOCK_METHOD(E<void>, allowedProtocols, (std::string_view), (override));
+    MOCK_METHOD(E<void>, allowedRedirectProtocols, (std::string_view),
+                (override));
 
 private:
     std::vector<std::vector<std::byte>> programmed_chunks;

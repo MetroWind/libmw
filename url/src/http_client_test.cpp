@@ -303,6 +303,102 @@ TEST(HTTPSession, Options)
 
     ASSERT_TRUE(s.maxRedirections(5).has_value());
     EXPECT_EQ(s.maxRedirections(), 5);
+
+    EXPECT_TRUE(s.followRedirects());
+    s.followRedirects(false);
+    EXPECT_FALSE(s.followRedirects());
+
+    EXPECT_FALSE(s.addressFilter());
+    s.addressFilter([](const SockAddr&) { return true; });
+    EXPECT_TRUE(s.addressFilter());
+
+    EXPECT_TRUE(s.allowedProtocols("https").has_value());
+    EXPECT_TRUE(s.allowedRedirectProtocols("https").has_value());
+}
+
+// An installed address filter that rejects loopback addresses must
+// cause a request to a loopback server to fail before any data is
+// transferred, with the distinguishable HTTP_BLOCKED_BY_POLICY error.
+TEST(HTTPSession, AddressFilterBlocksLoopback)
+{
+    httplib::Server server;
+    bool handler_called = false;
+    server.Get("/", [&](const httplib::Request&, httplib::Response& res)
+    {
+        handler_called = true;
+        res.set_content("aaa", "text/plain");
+    });
+    int port = 0;
+    std::thread t([&]()
+    {
+        port = server.bind_to_any_port("127.0.0.1");
+        server.listen_after_bind();
+    });
+    server.wait_until_ready();
+
+    {
+        HTTPSession s;
+        int filter_calls = 0;
+        SockAddr seen;
+        s.addressFilter([&](const SockAddr& addr) -> bool
+        {
+            ++filter_calls;
+            seen = addr;
+            // Reject IPv4 loopback (127.0.0.0/8).
+            if(addr.family == AddressFamily::IPV4 && !addr.address.empty() &&
+               addr.address[0] == 127)
+            {
+                return false;
+            }
+            return true;
+        });
+
+        auto result = s.get(std::format("http://127.0.0.1:{}/", port));
+        ASSERT_FALSE(result.has_value());
+        const Error& err = result.error();
+        // A policy block is a distinct error type, not a network error.
+        ASSERT_TRUE(std::holds_alternative<PolicyError>(err));
+        EXPECT_EQ(std::get<PolicyError>(err).msg,
+                  std::string(HTTP_BLOCKED_BY_POLICY));
+        // The filter saw the address, and the connection was aborted
+        // before the server handler ran.
+        EXPECT_GE(filter_calls, 1);
+        EXPECT_EQ(seen.family, AddressFamily::IPV4);
+        EXPECT_FALSE(handler_called);
+    }
+
+    server.stop();
+    t.join();
+}
+
+// A filter that allows the loopback address must let the request
+// proceed normally, confirming the open-socket path still connects.
+TEST(HTTPSession, AddressFilterAllowsConnection)
+{
+    httplib::Server server;
+    server.Get("/", [](const httplib::Request&, httplib::Response& res)
+    {
+        res.set_content("ok", "text/plain");
+    });
+    int port = 0;
+    std::thread t([&]()
+    {
+        port = server.bind_to_any_port("127.0.0.1");
+        server.listen_after_bind();
+    });
+    server.wait_until_ready();
+
+    {
+        HTTPSession s;
+        s.addressFilter([](const SockAddr&) { return true; });
+        auto result = s.get(std::format("http://127.0.0.1:{}/", port));
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ((*result)->status, 200);
+        EXPECT_EQ((*result)->payloadAsStr(), "ok");
+    }
+
+    server.stop();
+    t.join();
 }
 
 } // namespace mw
