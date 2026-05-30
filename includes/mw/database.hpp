@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exception>
+#include <format>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -81,12 +82,19 @@ public:
 
     /// \brief Open a SQLite database from a file.
     ///
-    /// \param db_file The path to the database file
+    /// \param db_file The path to the database file.
+    /// \param busy_timeout_ms How long, in milliseconds, SQLite should
+    ///     block-and-wait on a locked database before returning
+    ///     `SQLITE_BUSY`. This is the primary mechanism that lets
+    ///     multiple connections to the same WAL database tolerate
+    ///     concurrent writers. The default (5000 ms) suits typical
+    ///     contention; pass 0 to disable waiting entirely.
     static E<std::unique_ptr<SQLite>>
-    connectFile(const std::string& db_file);
+    connectFile(const std::string& db_file, int busy_timeout_ms = 5000);
 
-    /// Create a in-memory SQLite database.
-    static E<std::unique_ptr<SQLite>> connectMemory();
+    /// Create a in-memory SQLite database. See `connectFile()` for the
+    /// meaning of `busy_timeout_ms`.
+    static E<std::unique_ptr<SQLite>> connectMemory(int busy_timeout_ms = 5000);
 
     /// \brief Construct a SQLiteStatement object from a SQLite
     /// statement string.
@@ -169,6 +177,22 @@ private:
 
 namespace internal
 {
+
+/// Maximum number of times `eval()` re-runs a statement that returns
+/// `SQLITE_BUSY` / `SQLITE_LOCKED` before giving up. This retry loop is
+/// only a backstop; the `busy_timeout` set on connect is the primary
+/// wait mechanism, so a small bound is plenty.
+inline constexpr int SQLITE_BUSY_MAX_RETRIES = 5;
+
+/// Base backoff, in milliseconds, between busy retries. The actual wait
+/// increases linearly with the attempt number (see `sqliteBusyBackoff`).
+inline constexpr int SQLITE_BUSY_BASE_BACKOFF_MS = 5;
+
+/// Sleep for a short, attempt-dependent backoff before retrying a busy
+/// statement. `attempt` is the zero-based retry index. Defined in
+/// `database.cpp` so that `<thread>` / `<chrono>` stay out of this
+/// public header.
+void sqliteBusyBackoff(int attempt);
 
 template<typename T>
 inline void getValue(SQLiteStatement&, int, T&)
@@ -339,6 +363,7 @@ template<typename... Types>
 E<std::vector<std::tuple<Types...>>> SQLite::eval(SQLiteStatement sql) const
 {
     std::vector<std::tuple<Types...>> result;
+    int busy_retries = 0;
     while(true)
     {
         int code = sqlite3_step(sql.data());
@@ -350,8 +375,35 @@ E<std::vector<std::tuple<Types...>>> SQLite::eval(SQLiteStatement sql) const
             result.push_back(internal::getRow<Types...>(sql));
             break;
         case SQLITE_BUSY:
-            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            return std::unexpected(runtimeError(sqlite3_errstr(code)));
+        case SQLITE_LOCKED:
+            // The `busy_timeout` set on connect is the primary wait
+            // mechanism; this bounded retry-with-backoff is a backstop
+            // for the cases the timeout does not cover (e.g.
+            // `SQLITE_LOCKED` from a shared-cache conflict, or a
+            // momentary collision after the timeout elapses).
+            //
+            // We deliberately do NOT roll back here. The caller may
+            // have started an enclosing transaction, and silently
+            // rolling it back inside eval() would be surprising; let
+            // the caller decide what to do on a hard failure.
+            //
+            // Retry semantics: we reset the statement and re-run it
+            // from the start. To keep this correct even if SQLITE_BUSY
+            // surfaces mid-scan (after some SQLITE_ROWs), we discard
+            // any rows accumulated during this execution before
+            // retrying, so they cannot be duplicated. Re-executing the
+            // statement reproduces the full result set.
+            if(busy_retries >= internal::SQLITE_BUSY_MAX_RETRIES)
+            {
+                return std::unexpected(runtimeError(std::format(
+                    "SQL still busy after {} retries: {}",
+                    busy_retries, sqlite3_errstr(code))));
+            }
+            internal::sqliteBusyBackoff(busy_retries);
+            ++busy_retries;
+            result.clear();
+            sqlite3_reset(sql.data());
+            break;
         case SQLITE_ERROR:
         case SQLITE_MISUSE:
             return std::unexpected(runtimeError(std::string(

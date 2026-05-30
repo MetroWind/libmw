@@ -1,9 +1,11 @@
+#include <chrono>
 #include <expected>
 #include <format>
 #include <memory>
 #include <stdint.h>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include <sqlite3.h>
@@ -14,6 +16,25 @@
 
 namespace mw
 {
+
+namespace internal
+{
+
+void sqliteBusyBackoff(int attempt)
+{
+    // Linearly increasing backoff, capped so a pathological run can't
+    // sleep unboundedly. Kept here (rather than in the header) so the
+    // public header doesn't pull in <thread> / <chrono>.
+    constexpr int MAX_BACKOFF_MS = 50;
+    int ms = SQLITE_BUSY_BASE_BACKOFF_MS * (attempt + 1);
+    if(ms > MAX_BACKOFF_MS)
+    {
+        ms = MAX_BACKOFF_MS;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+} // namespace internal
 
 SQLiteStatement::SQLiteStatement(SQLiteStatement&& rhs)
 {
@@ -56,7 +77,7 @@ void SQLite::clear()
 }
 
 E<std::unique_ptr<SQLite>>
-SQLite::connectFile(const std::string& db_file)
+SQLite::connectFile(const std::string& db_file, int busy_timeout_ms)
 {
     auto data = std::make_unique<SQLite>();
     if(int code = sqlite3_open(db_file.c_str(), &data->db);
@@ -66,6 +87,16 @@ SQLite::connectFile(const std::string& db_file)
         return std::unexpected(runtimeError(std::string(
             "Failed to create DB connection: ") + sqlite3_errstr(code)));
     }
+    // Block-and-wait up to `busy_timeout_ms` on a locked database
+    // before returning SQLITE_BUSY. This is what lets separate
+    // connections to the same WAL database tolerate concurrent writers.
+    if(int code = sqlite3_busy_timeout(data->db, busy_timeout_ms);
+       code != SQLITE_OK)
+    {
+        data->clear();
+        return std::unexpected(runtimeError(std::string(
+            "Failed to set busy timeout: ") + sqlite3_errstr(code)));
+    }
     // Enable WAL.
     DO_OR_RETURN(data->execute("PRAGMA journal_mode = WAL;"));
     // Enable foreign key support.
@@ -73,9 +104,9 @@ SQLite::connectFile(const std::string& db_file)
     return data;
 }
 
-E<std::unique_ptr<SQLite>> SQLite::connectMemory()
+E<std::unique_ptr<SQLite>> SQLite::connectMemory(int busy_timeout_ms)
 {
-    return connectFile(":memory:");
+    return connectFile(":memory:", busy_timeout_ms);
 }
 
 E<SQLiteStatement> SQLite::statementFromStr(std::string_view s)

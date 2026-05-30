@@ -1,7 +1,10 @@
+#include <chrono>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stdint.h>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -91,4 +94,103 @@ TEST(Database, OptionalBinding)
     EXPECT_EQ(std::get<1>(result[0]), "hello");
     EXPECT_EQ(std::get<0>(result[1]), std::nullopt);
     EXPECT_EQ(std::get<1>(result[1]), std::nullopt);
+}
+
+// Two separate connections to the same on-disk WAL database, each
+// running interleaved write transactions, must not surface spurious
+// SQLITE_BUSY errors: the busy timeout / retry should make the
+// contended writer wait and eventually succeed. With the old behavior
+// (immediate ROLLBACK + error on SQLITE_BUSY) this test would fail.
+TEST(Database, ConcurrentWritersDoNotSpuriouslyFail)
+{
+    namespace fs = std::filesystem;
+    const auto stamp = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    const fs::path db_path = fs::temp_directory_path() /
+        ("libmw_busy_test_" + std::to_string(stamp) + ".sqlite");
+
+    // Make sure we start from a clean slate and clean up afterwards,
+    // including the WAL side files.
+    auto cleanup = [&]()
+    {
+        std::error_code ec;
+        fs::remove(db_path, ec);
+        fs::remove(fs::path(db_path).concat("-wal"), ec);
+        fs::remove(fs::path(db_path).concat("-shm"), ec);
+    };
+    cleanup();
+
+    {
+        ASSIGN_OR_FAIL(auto db, SQLite::connectFile(db_path.string()));
+        ASSERT_TRUE(db->execute(
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, worker INTEGER);")
+            .has_value());
+    }
+
+    constexpr int NUM_WORKERS = 8;
+    constexpr int INSERTS_PER_WORKER = 200;
+
+    // Each worker gets its own connection (the separate-connection
+    // concurrency case) and runs many small write transactions. Using
+    // BEGIN IMMEDIATE forces each transaction to grab the write lock up
+    // front, maximizing contention between workers.
+    auto worker = [&](int worker_id) -> bool
+    {
+        auto db_result = SQLite::connectFile(db_path.string());
+        if(!db_result.has_value())
+        {
+            return false;
+        }
+        auto db = std::move(*db_result);
+        for(int i = 0; i < INSERTS_PER_WORKER; ++i)
+        {
+            if(!db->execute("BEGIN IMMEDIATE;").has_value())
+            {
+                return false;
+            }
+            auto stmt = db->statementFromStr(
+                "INSERT INTO test (worker) VALUES (?);");
+            if(!stmt.has_value())
+            {
+                return false;
+            }
+            if(!stmt->bind(worker_id).has_value())
+            {
+                return false;
+            }
+            if(!db->execute(std::move(*stmt)).has_value())
+            {
+                return false;
+            }
+            if(!db->execute("COMMIT;").has_value())
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Distinct indices into `results`, so no synchronization is needed.
+    std::vector<int> results(NUM_WORKERS, 0);
+    std::vector<std::thread> threads;
+    for(int w = 0; w < NUM_WORKERS; ++w)
+    {
+        threads.emplace_back([&, w]() { results[w] = worker(w) ? 1 : 0; });
+    }
+    for(auto& t: threads)
+    {
+        t.join();
+    }
+
+    for(int w = 0; w < NUM_WORKERS; ++w)
+    {
+        EXPECT_EQ(results[w], 1) << "worker " << w << " hit a spurious error";
+    }
+
+    ASSIGN_OR_FAIL(auto db, SQLite::connectFile(db_path.string()));
+    ASSIGN_OR_FAIL(auto count,
+                   db->evalToValue<int64_t>("SELECT COUNT(*) FROM test;"));
+    EXPECT_EQ(count, NUM_WORKERS * INSERTS_PER_WORKER);
+
+    cleanup();
 }
