@@ -96,15 +96,13 @@ E<std::vector<unsigned char>> base64Decode(std::string_view data)
     }
     dtable['='] = 0;
 
-    // Count the number of valid base64 chars.
+    // Count the number of valid base64 chars. An input with no
+    // significant chars (empty, or only whitespace/padding) decodes to
+    // an empty vector, so we don’t treat count == 0 as an error.
     size_t count = 0;
     for(char c: data)
     {
-        if(dtable[c] != 0x80) count++;
-    }
-    if(count == 0)
-    {
-        return std::unexpected(runtimeError("Invalid base64 string"));
+        if(dtable[static_cast<unsigned char>(c)] != 0x80) count++;
     }
 
     std::vector<unsigned char> result;
@@ -116,7 +114,7 @@ E<std::vector<unsigned char>> base64Decode(std::string_view data)
     count = 0;
     for(char c: data)
     {
-        tmp = dtable[c];
+        tmp = dtable[static_cast<unsigned char>(c)];
         if (tmp == 0x80) continue;
         if (c == '=') break;
         block[count] = tmp;
@@ -130,19 +128,24 @@ E<std::vector<unsigned char>> base64Decode(std::string_view data)
         }
     }
 
-    // Now we have exhausted the part before the padding. “Count” is
-    // the number of chars before the padding. Since we always push 3
-    // bytes each time (for 4 base64 chars), depending on how many
-    // paddings that are supposed to be there, we might have pushed
-    // too many chars.
-    if(count % 4 == 2)
+    // Now we have exhausted the part before the padding. “Count” is the
+    // number of significant chars left after the last full 4-char group
+    // (0..3). Each leftover group yields fewer than 3 bytes:
+    //   2 chars -> 1 byte, 3 chars -> 2 bytes.
+    // A single leftover char carries only 6 bits and cannot form a byte,
+    // so it is malformed base64.
+    if(count == 2)
     {
         result.push_back((block[0] << 2) | (block[1] >> 4));
     }
-    else if(count % 4 == 1)
+    else if(count == 3)
     {
+        result.push_back((block[0] << 2) | (block[1] >> 4));
         result.push_back((block[1] << 4) | (block[2] >> 2));
-        result.push_back((block[2] << 6) | block[3]);
+    }
+    else if(count == 1)
+    {
+        return std::unexpected(runtimeError("Invalid base64 string"));
     }
 
     return result;

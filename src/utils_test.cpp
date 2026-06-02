@@ -89,4 +89,66 @@ TEST(Utils, CanDecodeBase64)
     }
 }
 
+TEST(Utils, CanDecodeUnpaddedBase64Tails)
+{
+    // 3-char tail ("fo" -> "Zm8"), both unpadded and padded.
+    {
+        std::string expected = "fo";
+        ASSIGN_OR_FAIL(auto result, base64Decode("Zm8"));
+        EXPECT_EQ(result,
+                  std::vector<unsigned char>(expected.begin(), expected.end()));
+    }
+    {
+        std::string expected = "fo";
+        ASSIGN_OR_FAIL(auto result, base64Decode("Zm8="));
+        EXPECT_EQ(result,
+                  std::vector<unsigned char>(expected.begin(), expected.end()));
+    }
+    // Full group followed by a 3-char tail ("fooba" -> "Zm9vYmE").
+    {
+        std::string expected = "fooba";
+        ASSIGN_OR_FAIL(auto result, base64Decode("Zm9vYmE"));
+        EXPECT_EQ(result,
+                  std::vector<unsigned char>(expected.begin(), expected.end()));
+    }
+    // 2-char tail ("foob" -> "Zm9vYg"), the case that already worked.
+    {
+        std::string expected = "foob";
+        ASSIGN_OR_FAIL(auto result, base64Decode("Zm9vYg"));
+        EXPECT_EQ(result,
+                  std::vector<unsigned char>(expected.begin(), expected.end()));
+    }
+}
+
+TEST(Utils, DecodeEmptyBase64YieldsEmpty)
+{
+    ASSIGN_OR_FAIL(auto result, base64Decode(""));
+    EXPECT_TRUE(result.empty());
+}
+
+TEST(Utils, DecodeMalformedBase64TailFails)
+{
+    // One full group ("Zm9v") plus a lone trailing char ("Y"): the
+    // 1-char tail carries only 6 bits and cannot form a byte.
+    EXPECT_FALSE(base64Decode("Zm9vY").has_value());
+}
+
+TEST(Utils, Base64RoundTripsArbitraryLengths)
+{
+    for(std::string original:
+        {std::string(""), std::string("f"), std::string("fo"),
+         std::string("foo"), std::string("foob"), std::string("fooba"),
+         std::string("foobar")})
+    {
+        const std::string encoded = base64Encode(
+            {reinterpret_cast<unsigned char*>(original.data()),
+             original.size()},
+            false, false);
+        ASSIGN_OR_FAIL(auto decoded, base64Decode(encoded));
+        EXPECT_EQ(decoded,
+                  std::vector<unsigned char>(original.begin(), original.end()))
+            << "round-trip failed for length " << original.size();
+    }
+}
+
 } // namespace mw
