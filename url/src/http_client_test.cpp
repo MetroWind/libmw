@@ -40,10 +40,10 @@ TEST(HTTPSession, CanGet)
     server.Get("/", [](const httplib::Request &, httplib::Response &res) {
         res.set_content("aaa", "text/plain");
     });
-    int port;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("localhost");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -51,10 +51,16 @@ TEST(HTTPSession, CanGet)
     {
         HTTPSession s;
         auto result = s.get(std::format("http://localhost:{}/", port));
-        ASSERT_TRUE(result.has_value());
+        if(!result.has_value())
+        {
+            server.stop();
+            t.join();
+            FAIL() << result.error().msg();
+        }
         const std::vector<std::byte>& payload = (*result)->payload;
-        EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(payload.data()),
-                                   payload.size()),
+        EXPECT_EQ(std::string_view(
+                      reinterpret_cast<const char*>(payload.data()),
+                      payload.size()),
                   "aaa");
         EXPECT_EQ((*result)->status, 200);
         ASSERT_TRUE((*result)->header.contains("Content-Type"));
@@ -93,10 +99,10 @@ TEST(HTTPSession, CanPost)
             res.status = 401;
         }
     });
-    int port;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("localhost");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -157,10 +163,10 @@ TEST(HTTPSession, LargeResponseNotTruncated)
     {
         res.set_content(big_payload, "application/octet-stream");
     });
-    int port;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("localhost");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -200,10 +206,10 @@ TEST(HTTPSession, StreamDeliversChunksInOrder)
     {
         res.set_content(big_payload, "application/octet-stream");
     });
-    int port;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("localhost");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -248,10 +254,10 @@ TEST(HTTPSession, StreamCallbackAbort)
     {
         res.set_content(big_payload, "application/octet-stream");
     });
-    int port;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("localhost");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -328,10 +334,10 @@ TEST(HTTPSession, AddressFilterBlocksLoopback)
         handler_called = true;
         res.set_content("aaa", "text/plain");
     });
-    int port = 0;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("127.0.0.1");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -344,16 +350,23 @@ TEST(HTTPSession, AddressFilterBlocksLoopback)
         {
             ++filter_calls;
             seen = addr;
-            // Reject IPv4 loopback (127.0.0.0/8).
             if(addr.family == AddressFamily::IPV4 && !addr.address.empty() &&
                addr.address[0] == 127)
+            {
+                return false;
+            }
+            if(addr.family == AddressFamily::IPV6 &&
+               addr.address.size() == 16 &&
+               std::all_of(addr.address.begin(), addr.address.end() - 1,
+                           [](std::uint8_t b) { return b == 0; }) &&
+               addr.address.back() == 1)
             {
                 return false;
             }
             return true;
         });
 
-        auto result = s.get(std::format("http://127.0.0.1:{}/", port));
+        auto result = s.get(std::format("http://localhost:{}/", port));
         ASSERT_FALSE(result.has_value());
         const Error& err = result.error();
         // A policy block is a distinct error type, not a network error.
@@ -363,7 +376,8 @@ TEST(HTTPSession, AddressFilterBlocksLoopback)
         // The filter saw the address, and the connection was aborted
         // before the server handler ran.
         EXPECT_GE(filter_calls, 1);
-        EXPECT_EQ(seen.family, AddressFamily::IPV4);
+        EXPECT_TRUE(seen.family == AddressFamily::IPV4 ||
+                    seen.family == AddressFamily::IPV6);
         EXPECT_FALSE(handler_called);
     }
 
@@ -380,10 +394,10 @@ TEST(HTTPSession, AddressFilterAllowsConnection)
     {
         res.set_content("ok", "text/plain");
     });
-    int port = 0;
+    int port = server.bind_to_any_port("localhost");
+    ASSERT_GT(port, 0);
     std::thread t([&]()
     {
-        port = server.bind_to_any_port("127.0.0.1");
         server.listen_after_bind();
     });
     server.wait_until_ready();
@@ -391,7 +405,7 @@ TEST(HTTPSession, AddressFilterAllowsConnection)
     {
         HTTPSession s;
         s.addressFilter([](const SockAddr&) { return true; });
-        auto result = s.get(std::format("http://127.0.0.1:{}/", port));
+        auto result = s.get(std::format("http://localhost:{}/", port));
         ASSERT_TRUE(result.has_value());
         EXPECT_EQ((*result)->status, 200);
         EXPECT_EQ((*result)->payloadAsStr(), "ok");

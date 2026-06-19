@@ -9,7 +9,9 @@ The library is split into several optional components:
 * **Core** (`mw`): Basic utilities, string manipulation, error handling, and process execution (`exec`).
 * **Crypto** (`mw::crypto`): Wrappers around OpenSSL for common cryptographic operations.
 * **SQLite** (`mw::sqlite`): A C++ wrapper for SQLite3 databases.
-* **URL** (`mw::url`): URL parsing and a HTTP client wrapper using cURL.
+* **URL** (`mw::url`): URL parsing, synchronous HTTP requests through
+  `mw::HTTPSession`, and coroutine-friendly async HTTP requests through
+  `mw::HTTPSessionAsync`.
 * **HTTP Server** (`mw::http-server`): An HTTP server implementation based on `cpp-httplib`, including authentication helpers.
 
 == Requirements
@@ -77,6 +79,20 @@ The following CMake options are available to control which modules are built:
 | `LIBMW_BUILD_CRYPTO` | Build `mw::crypto` module | `OFF`
 | `LIBMW_BUILD_HTTP_SERVER` | Build `mw::http-server` module | `OFF`
 |===
+
+== URL HTTP Clients
+
+The `mw::url` module provides two cURL-backed HTTP clients:
+
+* `mw::HTTPSession` performs synchronous requests and stores the latest
+  buffered response in the session.
+* `mw::HTTPSessionAsync` performs coroutine-friendly requests with one
+  internal curl multi driver thread. Async requests return
+  `mw::Task<mw::E<mw::HTTPResponse>>`, and the response is returned by value.
+
+For `HTTPSessionAsync`, streaming callbacks run on the internal driver thread,
+the session must outlive tasks started from it, and session options are copied
+when each request starts.
 
 == Building from Source
 

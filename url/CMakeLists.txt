@@ -28,11 +28,14 @@ find_package(CURL REQUIRED)
 set(SOURCE_FILES
   src/url.cpp
   src/http_client.cpp
+  src/http_client_async.cpp
 )
 
 set(HEADERS
   ../includes/mw/url.hpp
   ../includes/mw/http_client.hpp
+  ../includes/mw/http_client_async.hpp
+  ../includes/mw/task.hpp
 )
 
 set(LIBS
@@ -56,6 +59,7 @@ if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
     src/url_test.cpp
     src/http_client_test.cpp
+    src/http_client_async_test.cpp
   )
 
   # ctest --test-dir build
@@ -78,8 +82,8 @@ if(LIBMW_BUILD_TESTS)
   )
 
   enable_testing()
-  include(GoogleTest)
-  gtest_discover_tests(mw-url_test
+  add_test(NAME mw-url_test COMMAND mw-url_test)
+  set_tests_properties(mw-url_test PROPERTIES
     # Need this so that the unit tests can find the templates.
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
