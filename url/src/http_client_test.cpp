@@ -269,9 +269,9 @@ TEST(HTTPSession, StreamCallbackAbort)
             });
         ASSERT_FALSE(result.has_value());
         const Error& err = result.error();
-        ASSERT_TRUE(std::holds_alternative<RuntimeError>(err));
-        EXPECT_EQ(std::get<RuntimeError>(err).msg,
-                  std::string(HTTP_ABORTED_BY_CALLER));
+        const RuntimeError* runtime_error = err.as<RuntimeError>();
+        ASSERT_NE(runtime_error, nullptr);
+        EXPECT_EQ(runtime_error->msg, std::string(HTTP_ABORTED_BY_CALLER));
         EXPECT_EQ(chunks_seen, 1);
     }
 
@@ -357,9 +357,9 @@ TEST(HTTPSession, AddressFilterBlocksLoopback)
         ASSERT_FALSE(result.has_value());
         const Error& err = result.error();
         // A policy block is a distinct error type, not a network error.
-        ASSERT_TRUE(std::holds_alternative<PolicyError>(err));
-        EXPECT_EQ(std::get<PolicyError>(err).msg,
-                  std::string(HTTP_BLOCKED_BY_POLICY));
+        const PolicyError* policy_error = err.as<PolicyError>();
+        ASSERT_NE(policy_error, nullptr);
+        EXPECT_EQ(policy_error->msg, std::string(HTTP_BLOCKED_BY_POLICY));
         // The filter saw the address, and the connection was aborted
         // before the server handler ran.
         EXPECT_GE(filter_calls, 1);

@@ -71,7 +71,7 @@ TEST(Auth, CreateCanHandleServerConfError)
         "https://example.com/", "client id", "", "http://localhost/",
         std::move(http));
     ASSERT_FALSE(auth.has_value());
-    EXPECT_EQ(std::visit([&](auto e) { return e.msg; }, auth.error()),
+    EXPECT_EQ(mw::errorMsg(auth.error()),
               "Invalid OpenID configuration from server");
 }
 
@@ -87,7 +87,7 @@ TEST(Auth, CreateCanHandleInvalidJSON)
         "https://example.com/", "client id", "", "http://localhost/",
         std::move(http));
     ASSERT_FALSE(auth.has_value());
-    EXPECT_EQ(std::visit([&](auto e) { return e.msg; }, auth.error()),
+    EXPECT_EQ(mw::errorMsg(auth.error()),
               "Invalid OpenID configuration from server");
 }
 
@@ -102,8 +102,7 @@ TEST(Auth, CreateCanHandleFaultyServer)
         "https://example.com/", "client id", "", "http://localhost/",
         std::move(http));
     ASSERT_FALSE(auth.has_value());
-    EXPECT_EQ(std::visit([&](auto e) { return e.msg; }, auth.error()),
-              "server died");
+    EXPECT_EQ(mw::errorMsg(auth.error()), "server died");
 }
 
 TEST(Auth, InitiateJustPropagateServerError)
@@ -224,8 +223,10 @@ TEST(Auth, AuthenticateCanHandleFailedQuery)
 
     mw::E<mw::Tokens> tokens = (*auth)->authenticate("some code");
     ASSERT_FALSE(tokens.has_value());
-    mw::Error expected = mw::HTTPError{500, ""};
-    EXPECT_EQ(tokens.error(), expected);
+    const mw::HTTPError* error = tokens.error().as<mw::HTTPError>();
+    ASSERT_NE(error, nullptr);
+    EXPECT_EQ(error->code, 500);
+    EXPECT_EQ(error->msg, "");
 }
 
 TEST(Auth, AuthenticateCanHandleServerFault)
@@ -260,7 +261,9 @@ TEST(Auth, AuthenticateCanHandleServerFault)
         "http://localhost/", std::move(http));
     mw::E<mw::Tokens> tokens = (*auth)->authenticate("some code");
     ASSERT_FALSE(tokens.has_value());
-    EXPECT_EQ(tokens.error(), mw::Error(mw::RuntimeError{"error"}));
+    const mw::RuntimeError* error = tokens.error().as<mw::RuntimeError>();
+    ASSERT_NE(error, nullptr);
+    EXPECT_EQ(error->msg, "error");
 }
 
 TEST(Auth, AuthenticateCanHandleInvalidJSON)
@@ -296,7 +299,9 @@ TEST(Auth, AuthenticateCanHandleInvalidJSON)
         "http://localhost/", std::move(http));
     mw::E<mw::Tokens> tokens = (*auth)->authenticate("some code");
     ASSERT_FALSE(tokens.has_value());
-    EXPECT_EQ(tokens.error(), mw::runtimeError("Invalid token response"));
+    const mw::RuntimeError* error = tokens.error().as<mw::RuntimeError>();
+    ASSERT_NE(error, nullptr);
+    EXPECT_EQ(error->msg, "Invalid token response");
 }
 
 TEST(Auth, CanRefreshTokens)
