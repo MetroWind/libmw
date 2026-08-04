@@ -3,8 +3,6 @@
 #include <string>
 #include <vector>
 
-#include <openssl/evp.h>
-
 #include "error.hpp"
 
 namespace mw
@@ -27,37 +25,79 @@ public:
     virtual E<std::string> hashToHexStr(const std::string& bytes) const;
 };
 
-// This hasher takes the first half of the SHA256 hash.
+/// A stateless SHA-256 hasher.
+///
+/// Each hash operation owns a separate digest context. The same instance may
+/// therefore be used concurrently from multiple threads.
 class SHA256Hasher : public HasherInterface
 {
 public:
-    SHA256Hasher();
-    ~SHA256Hasher() override;
+    /// Construct a SHA-256 hasher.
+    SHA256Hasher() = default;
+
+    /// Destroy a SHA-256 hasher.
+    ~SHA256Hasher() override = default;
+
+    /// Copy a SHA-256 hasher, which has no operation state.
+    SHA256Hasher(const SHA256Hasher&) = default;
+
+    /// Assign a SHA-256 hasher, which has no operation state.
+    SHA256Hasher& operator=(const SHA256Hasher&) = default;
+
+    /// Move a SHA-256 hasher, which has no operation state.
+    SHA256Hasher(SHA256Hasher&&) noexcept = default;
+
+    /// Move-assign a SHA-256 hasher, which has no operation state.
+    SHA256Hasher& operator=(SHA256Hasher&&) noexcept = default;
+
+    /// Hash the given bytes with SHA-256 and return the raw digest.
     E<std::vector<unsigned char>> hashToBytes(const std::string& bytes)
         const override;
-
-private:
-    EVP_MD_CTX* ctx;
 };
 
+/// A stateless SHA-512 hasher.
+///
+/// Each hash operation owns a separate digest context. The same instance may
+/// therefore be used concurrently from multiple threads.
 class SHA512Hasher : public HasherInterface
 {
 public:
-    SHA512Hasher();
-    ~SHA512Hasher() override;
+    /// Construct a SHA-512 hasher.
+    SHA512Hasher() = default;
+
+    /// Destroy a SHA-512 hasher.
+    ~SHA512Hasher() override = default;
+
+    /// Copy a SHA-512 hasher, which has no operation state.
+    SHA512Hasher(const SHA512Hasher&) = default;
+
+    /// Assign a SHA-512 hasher, which has no operation state.
+    SHA512Hasher& operator=(const SHA512Hasher&) = default;
+
+    /// Move a SHA-512 hasher, which has no operation state.
+    SHA512Hasher(SHA512Hasher&&) noexcept = default;
+
+    /// Move-assign a SHA-512 hasher, which has no operation state.
+    SHA512Hasher& operator=(SHA512Hasher&&) noexcept = default;
+
+    /// Hash the given bytes with SHA-512 and return the raw digest.
     E<std::vector<unsigned char>> hashToBytes(const std::string& bytes)
         const override;
-
-private:
-    EVP_MD_CTX* ctx;
 };
 
-// This hasher takes the first half of the SHA256 hash.
+/// A stateless hasher returning the first half of a SHA-256 digest.
+///
+/// The same instance may be used concurrently from multiple threads.
 class SHA256HalfHasher : public HasherInterface
 {
 public:
+    /// Construct a half-SHA-256 hasher.
     SHA256HalfHasher() = default;
+
+    /// Destroy a half-SHA-256 hasher.
     ~SHA256HalfHasher() override = default;
+
+    /// Hash the bytes and return the first half of the SHA-256 digest.
     E<std::vector<unsigned char>> hashToBytes(const std::string& bytes)
         const override;
 

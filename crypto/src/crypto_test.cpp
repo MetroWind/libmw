@@ -1,4 +1,6 @@
+#include <future>
 #include <string>
+#include <type_traits>
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -12,6 +14,15 @@
 #include "test_utils.hpp"
 
 using ::testing::ElementsAre;
+
+static_assert(std::is_copy_constructible_v<mw::SHA256Hasher>);
+static_assert(std::is_copy_assignable_v<mw::SHA256Hasher>);
+static_assert(std::is_move_constructible_v<mw::SHA256Hasher>);
+static_assert(std::is_move_assignable_v<mw::SHA256Hasher>);
+static_assert(std::is_copy_constructible_v<mw::SHA512Hasher>);
+static_assert(std::is_copy_assignable_v<mw::SHA512Hasher>);
+static_assert(std::is_move_constructible_v<mw::SHA512Hasher>);
+static_assert(std::is_move_assignable_v<mw::SHA512Hasher>);
 
 namespace {
 
@@ -175,6 +186,69 @@ TEST(Hash, CanHashSHA512)
     EXPECT_EQ(result,
               "d6f644b19812e97b5d871658d6d3400ecd4787faeb9b8990c1e7608288664be7"
               "7257104a58d033bcf1a0e0945ff06468ebe53e2dff36e248424c7273117dac09");
+}
+
+TEST(Hash, InstancesMayBeUsedConcurrently)
+{
+    const mw::SHA256Hasher sha256_hasher;
+    const mw::SHA512Hasher sha512_hasher;
+    const mw::SHA256HalfHasher half_hasher;
+    const std::string first_input = "concurrent input one";
+    const std::string second_input = "concurrent input two";
+
+    ASSIGN_OR_FAIL(auto first_sha256,
+                   mw::SHA256Hasher().hashToBytes(first_input));
+    ASSIGN_OR_FAIL(auto second_sha256,
+                   mw::SHA256Hasher().hashToBytes(second_input));
+    ASSIGN_OR_FAIL(auto first_sha512,
+                   mw::SHA512Hasher().hashToBytes(first_input));
+    ASSIGN_OR_FAIL(auto second_sha512,
+                   mw::SHA512Hasher().hashToBytes(second_input));
+    ASSIGN_OR_FAIL(auto first_half,
+                   mw::SHA256HalfHasher().hashToBytes(first_input));
+    ASSIGN_OR_FAIL(auto second_half,
+                   mw::SHA256HalfHasher().hashToBytes(second_input));
+
+    std::vector<std::future<bool>> results;
+    constexpr size_t TASK_COUNT = 16;
+    constexpr size_t HASHES_PER_TASK = 256;
+    for(size_t task = 0; task < TASK_COUNT; ++task)
+    {
+        results.push_back(std::async(
+            std::launch::async,
+            [&, task]()
+            {
+                for(size_t iteration = 0; iteration < HASHES_PER_TASK;
+                    ++iteration)
+                {
+                    const bool use_first = (task + iteration) % 2 == 0;
+                    const std::string& input =
+                        use_first ? first_input : second_input;
+                    const auto& expected_sha256 =
+                        use_first ? first_sha256 : second_sha256;
+                    const auto& expected_sha512 =
+                        use_first ? first_sha512 : second_sha512;
+                    const auto& expected_half =
+                        use_first ? first_half : second_half;
+
+                    auto sha256 = sha256_hasher.hashToBytes(input);
+                    auto sha512 = sha512_hasher.hashToBytes(input);
+                    auto half = half_hasher.hashToBytes(input);
+                    if(!sha256 || *sha256 != expected_sha256 ||
+                       !sha512 || *sha512 != expected_sha512 ||
+                       !half || *half != expected_half)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+    }
+
+    for(auto& result : results)
+    {
+        EXPECT_TRUE(result.get());
+    }
 }
 
 TEST(Signature, CanVerifySignatures)
