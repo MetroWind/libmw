@@ -161,14 +161,17 @@ public:
     /// encoded public key. HMAC treats this as opaque raw key bytes.
     /// @param signature The signature to verify.
     /// @param data The data that was signed.
-    /// @return True if the signature is valid, false if it is invalid. Returns
-    /// an error for an unsupported algorithm, malformed key, incompatible key,
-    /// or unusable key.
+    /// @return True if the signature is valid, false when the cryptographic
+    /// check reports a mismatch. Returns an error for an unsupported algorithm,
+    /// malformed key, incompatible key, unusable key, or serious verification
+    /// failure.
     ///
     /// RSA-PSS accepts general RSA or compatible RSA-PSS keys of at least 2,048
     /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
     /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
     /// requires an Ed25519 public key.
+    /// Public errors do not contain caller-supplied key, signature, or data
+    /// bytes.
     virtual E<bool> verifySignature(
         SignatureAlgorithm algo, const std::string& key,
         const std::vector<unsigned char>& signature,
@@ -187,6 +190,7 @@ public:
     /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
     /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
     /// requires an Ed25519 private key.
+    /// Public errors do not contain caller-supplied key or data bytes.
     virtual E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
                                                const std::string& key,
                                                const std::string& data) = 0;
@@ -207,6 +211,7 @@ public:
     /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
     /// @param clear_content The plaintext data to encrypt.
     /// @return The encrypted ciphertext, or an error if encryption failed.
+    /// Public errors do not contain the key or plaintext.
     virtual E<std::string> encrypt(EncryptionAlgorithm algo,
                                    const std::string& key,
                                    const std::string& clear_content) = 0;
@@ -220,6 +225,9 @@ public:
     /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
     /// @param encrypted_content The ciphertext data to decrypt.
     /// @return The decrypted plaintext data, or an error if decryption failed.
+    /// Authentication failure returns an error and no plaintext. Candidate
+    /// plaintext is cleared from libmw's temporary output buffer. Public
+    /// errors do not contain the key or ciphertext.
     virtual E<std::string> decrypt(EncryptionAlgorithm algo,
                                    const std::string& key,
                                    const std::string& encrypted_content) = 0;
@@ -233,6 +241,7 @@ public:
     /// @param parallelism Number of threads/lanes.
     /// @param key_length The length of the derived key in bytes.
     /// @return The derived key as raw bytes, or an error if derivation failed.
+    /// Public errors do not contain the password, salt, or derived key bytes.
     virtual E<std::vector<unsigned char>> deriveKeyArgon2id(
         const std::string& password, const std::string& salt,
         uint32_t iterations, uint32_t memory_kb, uint32_t parallelism,

@@ -61,17 +61,17 @@ rebuild before using this version, although existing source remains compatible.
 
 ### Error Handling and Output Safety
 
-- [ ] Establish a clean OpenSSL error-queue boundary for every public crypto
+- [x] Establish a clean OpenSSL error-queue boundary for every public crypto
   operation.
-- [ ] Clear stale errors on entry and consume the complete relevant error
+- [x] Clear stale errors on entry and consume the complete relevant error
   queue on infrastructure failures.
-- [ ] Return a stable, generic error for authentication failures instead of
+- [x] Return a stable, generic error for authentication failures instead of
   exposing provider-specific details or an empty OpenSSL error.
-- [ ] Check every OpenSSL return value, including BIO serialization and
+- [x] Check every OpenSSL return value, including BIO serialization and
   extraction operations.
-- [ ] Ensure failures never return partially initialized output.
-- [ ] Clear temporary plaintext after failed authenticated decryption.
-- [ ] Ensure public errors never contain keys, passwords, plaintext, or other
+- [x] Ensure failures never return partially initialized output.
+- [x] Clear temporary plaintext after failed authenticated decryption.
+- [x] Ensure public errors never contain keys, passwords, plaintext, or other
   secret material.
 
 ### Input and Resource Limits

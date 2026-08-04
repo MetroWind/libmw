@@ -9,6 +9,7 @@ find_package(OpenSSL REQUIRED)
 
 set(SOURCE_FILES
   src/crypto.cpp
+  src/crypto_internal.hpp
 )
 
 set(HEADERS

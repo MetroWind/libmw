@@ -1,11 +1,13 @@
 #include <expected>
-#include <algorithm>
 #include <array>
 #include <vector>
 #include <string>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <memory>
+#include <string_view>
+#include <utility>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -18,6 +20,7 @@
 #include <openssl/objects.h>
 
 #include "crypto.hpp"
+#include "crypto_internal.hpp"
 #include "error.hpp"
 #include "utils.hpp"
 
@@ -43,6 +46,79 @@ constexpr size_t GCM_TAG_LEN = 16;
 constexpr size_t AES_256_KEY_LEN = 32;
 constexpr int MIN_RSA_BITS = 2048;
 
+constexpr std::string_view HASH_CONTEXT_FAILURE =
+    "Failed to create hash context";
+constexpr std::string_view HASH_INITIALIZATION_FAILURE =
+    "Failed to initialize hasher";
+constexpr std::string_view HASH_UPDATE_FAILURE = "Failed to update hash";
+constexpr std::string_view HASH_FINALIZATION_FAILURE =
+    "Failed to finalize hash";
+constexpr std::string_view HMAC_KEY_FAILURE = "Failed to create HMAC key";
+constexpr std::string_view PUBLIC_KEY_FAILURE = "Failed to load public key";
+constexpr std::string_view PRIVATE_KEY_FAILURE = "Failed to load private key";
+constexpr std::string_view SIGNATURE_CONTEXT_FAILURE =
+    "Failed to create signature context";
+constexpr std::string_view SIGNATURE_INITIALIZATION_FAILURE =
+    "Failed to initialize signature operation";
+constexpr std::string_view SIGNATURE_PRODUCTION_FAILURE =
+    "Failed to create signature";
+constexpr std::string_view SIGNATURE_VERIFICATION_FAILURE =
+    "Signature verification failed";
+constexpr std::string_view KEY_VALIDATION_FAILURE = "Failed to validate key";
+constexpr std::string_view KEY_GENERATION_CONTEXT_FAILURE =
+    "Failed to create key generation context";
+constexpr std::string_view KEY_GENERATION_INITIALIZATION_FAILURE =
+    "Failed to initialize key generation";
+constexpr std::string_view KEY_GENERATION_FAILURE = "Failed to generate key";
+constexpr std::string_view PUBLIC_KEY_SERIALIZATION_FAILURE =
+    "Failed to serialize public key";
+constexpr std::string_view PRIVATE_KEY_SERIALIZATION_FAILURE =
+    "Failed to serialize private key";
+constexpr std::string_view RANDOM_IV_FAILURE = "Failed to generate random IV";
+constexpr std::string_view ENCRYPTION_FAILURE = "Encryption failed";
+constexpr std::string_view DECRYPTION_FAILURE = "Decryption failed";
+constexpr std::string_view AUTHENTICATION_FAILURE =
+    "Ciphertext authentication failed";
+constexpr std::string_view ARGON2ID_UNAVAILABLE = "Argon2id is unavailable";
+constexpr std::string_view ARGON2ID_DERIVATION_FAILURE =
+    "Argon2id derivation failed";
+
+class OpenSSLErrorBoundary
+{
+public:
+    /// Clear stale diagnostics before a public crypto operation.
+    OpenSSLErrorBoundary()
+    {
+        ERR_clear_error();
+    }
+
+    /// Prevent diagnostics from escaping a public crypto operation.
+    ~OpenSSLErrorBoundary()
+    {
+        ERR_clear_error();
+    }
+
+    OpenSSLErrorBoundary(const OpenSSLErrorBoundary&) = delete;
+    OpenSSLErrorBoundary& operator=(const OpenSSLErrorBoundary&) = delete;
+};
+
+void drainOpenSSLErrors() noexcept
+{
+    while(ERR_get_error() != 0)
+    {}
+}
+
+Error openSSLFailure(std::string_view public_message)
+{
+    drainOpenSSLErrors();
+    return runtimeError(public_message);
+}
+
+bool fitsOpenSSLInt(size_t value)
+{
+    return value <= static_cast<size_t>(std::numeric_limits<int>::max());
+}
+
 enum class SignatureKeyKind
 {
     RSA,
@@ -65,31 +141,35 @@ E<std::vector<unsigned char>> hash(const EVP_MD* digest,
     EVP_MD_CTX_ptr ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if(!ctx)
     {
-        return std::unexpected(runtimeError("Failed to create hash context"));
+        return std::unexpected(openSSLFailure(HASH_CONTEXT_FAILURE));
     }
     if(EVP_DigestInit_ex(ctx.get(), digest, nullptr) <= 0)
     {
-        return std::unexpected(runtimeError("Failed to initialize hasher"));
+        return std::unexpected(openSSLFailure(HASH_INITIALIZATION_FAILURE));
     }
     if(EVP_DigestUpdate(ctx.get(), bytes.data(), bytes.size()) <= 0)
     {
-        return std::unexpected(runtimeError("Failed to update hash"));
+        return std::unexpected(openSSLFailure(HASH_UPDATE_FAILURE));
     }
 
-    std::vector<unsigned char> result(
-        static_cast<size_t>(EVP_MD_get_size(digest)));
+    const int digest_size = EVP_MD_get_size(digest);
+    if(digest_size <= 0)
+    {
+        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
+    }
+
+    std::vector<unsigned char> result(static_cast<size_t>(digest_size));
     unsigned int hash_length = 0;
     if(EVP_DigestFinal_ex(ctx.get(), result.data(), &hash_length) <= 0)
     {
-        return std::unexpected(runtimeError("Failed to finalize hash"));
+        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
+    }
+    if(hash_length == 0 || static_cast<size_t>(hash_length) > result.size())
+    {
+        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
     }
     result.resize(hash_length);
     return result;
-}
-
-std::string getOpenSSLError(const std::string& msg)
-{
-    return msg + ": " + ERR_error_string(ERR_get_error(), nullptr);
 }
 
 E<SignatureProfile> signatureProfile(SignatureAlgorithm algo)
@@ -122,6 +202,11 @@ E<SignatureProfile> signatureProfile(SignatureAlgorithm algo)
 
 E<EVP_PKEY_ptr> createHMACKey(const std::string& key)
 {
+    if(!fitsOpenSSLInt(key.size()))
+    {
+        return std::unexpected(openSSLFailure(HMAC_KEY_FAILURE));
+    }
+
     EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
     pkey.reset(EVP_PKEY_new_mac_key(
         EVP_PKEY_HMAC, nullptr,
@@ -130,7 +215,7 @@ E<EVP_PKEY_ptr> createHMACKey(const std::string& key)
 
     if (!pkey)
     {
-        return std::unexpected(runtimeError("Failed to create HMAC key"));
+        return std::unexpected(openSSLFailure(HMAC_KEY_FAILURE));
     }
 
     return pkey;
@@ -138,19 +223,23 @@ E<EVP_PKEY_ptr> createHMACKey(const std::string& key)
 
 E<EVP_PKEY_ptr> loadPublicKeyPEM(const std::string& key)
 {
+    if(!fitsOpenSSLInt(key.size()))
+    {
+        return std::unexpected(openSSLFailure(PUBLIC_KEY_FAILURE));
+    }
+
     EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
     BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
                 BIO_free);
     if (!bio)
     {
-        return std::unexpected(runtimeError("Failed to create key BIO"));
+        return std::unexpected(openSSLFailure(PUBLIC_KEY_FAILURE));
     }
 
     pkey.reset(PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
     if (!pkey)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to load public key")));
+        return std::unexpected(openSSLFailure(PUBLIC_KEY_FAILURE));
     }
 
     return pkey;
@@ -158,20 +247,24 @@ E<EVP_PKEY_ptr> loadPublicKeyPEM(const std::string& key)
 
 E<EVP_PKEY_ptr> loadPrivateKeyPEM(const std::string& key)
 {
+    if(!fitsOpenSSLInt(key.size()))
+    {
+        return std::unexpected(openSSLFailure(PRIVATE_KEY_FAILURE));
+    }
+
     EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
     BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
                 BIO_free);
     if (!bio)
     {
-        return std::unexpected(runtimeError("Failed to create key BIO"));
+        return std::unexpected(openSSLFailure(PRIVATE_KEY_FAILURE));
     }
 
     pkey.reset(
         PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
     if (!pkey)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to load private key")));
+        return std::unexpected(openSSLFailure(PRIVATE_KEY_FAILURE));
     }
 
     return pkey;
@@ -184,40 +277,68 @@ E<void> validateKeyType(EVP_PKEY* pkey, const SignatureProfile& profile)
     case SignatureKeyKind::RSA:
         // Check RSA-PSS first. Some providers expose a PSS-only key through
         // the general RSA name as well.
-        if(EVP_PKEY_is_a(pkey, "RSA-PSS") == 1)
         {
-            if(!profile.use_pss)
+            const int pss_match = EVP_PKEY_is_a(pkey, "RSA-PSS");
+            if(pss_match == 1)
             {
-                return std::unexpected(runtimeError(
-                    "Incompatible key type for signature algorithm"));
+                if(!profile.use_pss)
+                {
+                    return std::unexpected(openSSLFailure(
+                        "Incompatible key type for signature algorithm"));
+                }
+                return {};
             }
-            return {};
+            if(pss_match != 0)
+            {
+                return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
+            }
         }
-        if(EVP_PKEY_is_a(pkey, "RSA") == 1)
         {
-            return {};
+            const int rsa_match = EVP_PKEY_is_a(pkey, "RSA");
+            if(rsa_match == 1)
+            {
+                return {};
+            }
+            if(rsa_match != 0)
+            {
+                return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
+            }
         }
         break;
     case SignatureKeyKind::EC:
-        if(EVP_PKEY_is_a(pkey, "EC") == 1)
+    {
+        const int ec_match = EVP_PKEY_is_a(pkey, "EC");
+        if(ec_match == 1)
         {
             return {};
         }
+        if(ec_match != 0)
+        {
+            return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
+        }
         break;
+    }
     case SignatureKeyKind::ED25519:
-        if(EVP_PKEY_is_a(pkey, "ED25519") == 1)
+    {
+        const int ed25519_match = EVP_PKEY_is_a(pkey, "ED25519");
+        if(ed25519_match == 1)
         {
             return {};
         }
+        if(ed25519_match != 0)
+        {
+            return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
+        }
         break;
+    }
     case SignatureKeyKind::HMAC:
         return {};
     default:
         break;
     }
 
-    return std::unexpected(
-        runtimeError("Incompatible key type for signature algorithm"));
+    return std::unexpected(openSSLFailure(
+        "Incompatible key type for signature algorithm"));
 }
 
 E<void> validateRSAKey(EVP_PKEY* pkey)
@@ -226,12 +347,12 @@ E<void> validateRSAKey(EVP_PKEY* pkey)
     if(bits <= 0)
     {
         return std::unexpected(
-            runtimeError("Failed to determine RSA key size"));
+            openSSLFailure("Failed to determine RSA key size"));
     }
     if(bits < MIN_RSA_BITS)
     {
         return std::unexpected(
-            runtimeError("RSA key is smaller than 2048 bits"));
+            openSSLFailure("RSA key is smaller than 2048 bits"));
     }
 
     return {};
@@ -243,22 +364,23 @@ E<void> validateECKey(EVP_PKEY* pkey, const SignatureProfile& profile)
     size_t group_name_length = 0;
     if(EVP_PKEY_get_group_name(pkey, group_name.data(), group_name.size(),
                                &group_name_length) != 1 ||
-       group_name_length >= group_name.size())
+       group_name_length >= group_name.size() ||
+       group_name[group_name_length] != '\0')
     {
-        return std::unexpected(runtimeError("Failed to determine EC curve"));
-    }
-
-    const auto end = std::find(group_name.begin(), group_name.end(), '\0');
-    if(end == group_name.end())
-    {
-        return std::unexpected(runtimeError("Failed to determine EC curve"));
+        return std::unexpected(
+            openSSLFailure("Failed to determine EC curve"));
     }
 
     const int curve_nid = OBJ_txt2nid(group_name.data());
+    if(curve_nid == NID_undef)
+    {
+        return std::unexpected(
+            openSSLFailure("Failed to determine EC curve"));
+    }
     if(curve_nid != profile.ec_curve_nid)
     {
         return std::unexpected(
-            runtimeError("Incompatible EC curve for signature algorithm"));
+            openSSLFailure("Incompatible EC curve for signature algorithm"));
     }
 
     return {};
@@ -271,8 +393,7 @@ E<void> validatePublicKey(EVP_PKEY* pkey)
         EVP_PKEY_CTX_free);
     if(!pkey_ctx)
     {
-        return std::unexpected(
-            runtimeError("Failed to create public key validation context"));
+        return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
     }
 
     const int result = EVP_PKEY_public_check(pkey_ctx.get());
@@ -282,10 +403,10 @@ E<void> validatePublicKey(EVP_PKEY* pkey)
     }
     if(result == 0)
     {
-        return std::unexpected(runtimeError("Invalid public key"));
+        return std::unexpected(openSSLFailure("Invalid public key"));
     }
 
-    return std::unexpected(runtimeError("Failed to validate public key"));
+    return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
 }
 
 E<void> validatePrivateKey(EVP_PKEY* pkey)
@@ -295,8 +416,7 @@ E<void> validatePrivateKey(EVP_PKEY* pkey)
         EVP_PKEY_CTX_free);
     if(!pkey_ctx)
     {
-        return std::unexpected(
-            runtimeError("Failed to create private key validation context"));
+        return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
     }
 
     const int result = EVP_PKEY_pairwise_check(pkey_ctx.get());
@@ -306,10 +426,10 @@ E<void> validatePrivateKey(EVP_PKEY* pkey)
     }
     if(result == 0)
     {
-        return std::unexpected(runtimeError("Invalid private key"));
+        return std::unexpected(openSSLFailure("Invalid private key"));
     }
 
-    return std::unexpected(runtimeError("Failed to validate private key"));
+    return std::unexpected(openSSLFailure(KEY_VALIDATION_FAILURE));
 }
 
 E<void> validateAsymmetricKey(EVP_PKEY* pkey,
@@ -331,8 +451,8 @@ E<void> validateAsymmetricKey(EVP_PKEY* pkey,
     case SignatureKeyKind::HMAC:
         return {};
     default:
-        return std::unexpected(
-            runtimeError("Incompatible key type for signature algorithm"));
+        return std::unexpected(openSSLFailure(
+            "Incompatible key type for signature algorithm"));
     }
 
     if(private_key)
@@ -353,11 +473,11 @@ E<void> configureSignatureContext(EVP_PKEY_CTX* pkey_ctx,
     {
         if(profile.use_pss)
         {
-            return std::unexpected(runtimeError(
+            return std::unexpected(openSSLFailure(
                 "Incompatible RSA-PSS key restrictions"));
         }
         return std::unexpected(
-            runtimeError("Failed to create RSA signature context"));
+            openSSLFailure(SIGNATURE_INITIALIZATION_FAILURE));
     }
 
     if(profile.use_pss)
@@ -371,7 +491,7 @@ E<void> configureSignatureContext(EVP_PKEY_CTX* pkey_ctx,
         if(padding_result <= 0 || mgf1_result <= 0 ||
            salt_length_result <= 0)
         {
-            return std::unexpected(runtimeError(
+            return std::unexpected(openSSLFailure(
                 "Incompatible RSA-PSS key restrictions"));
         }
         return {};
@@ -380,7 +500,7 @@ E<void> configureSignatureContext(EVP_PKEY_CTX* pkey_ctx,
     if(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING) <= 0)
     {
         return std::unexpected(
-            runtimeError("Failed to set RSA PKCS#1 v1.5 padding"));
+            openSSLFailure(SIGNATURE_INITIALIZATION_FAILURE));
     }
 
     return {};
@@ -405,14 +525,14 @@ E<bool> verifyHMAC(EVP_PKEY* pkey, const SignatureProfile& profile,
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if (!md_ctx)
     {
-        return std::unexpected(runtimeError("Failed to create MD context"));
+        return std::unexpected(openSSLFailure(SIGNATURE_CONTEXT_FAILURE));
     }
 
     if(EVP_DigestSignInit(md_ctx.get(), nullptr, profile.digest, nullptr,
                            pkey) <= 0)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestSignInit failed")));
+            openSSLFailure(SIGNATURE_INITIALIZATION_FAILURE));
     }
 
     size_t sig_len = 0;
@@ -420,8 +540,11 @@ E<bool> verifyHMAC(EVP_PKEY* pkey, const SignatureProfile& profile,
                        reinterpret_cast<const unsigned char*>(data.data()),
                        data.size()) <= 0)
     {
-        return std::unexpected(
-            runtimeError("EVP_DigestSign (length) failed"));
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
+    }
+    if(sig_len == 0)
+    {
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
     }
 
     std::vector<unsigned char> computed_sig(sig_len);
@@ -429,16 +552,24 @@ E<bool> verifyHMAC(EVP_PKEY* pkey, const SignatureProfile& profile,
                        reinterpret_cast<const unsigned char*>(data.data()),
                        data.size()) <= 0)
     {
-        return std::unexpected(runtimeError("EVP_DigestSign failed"));
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
+    }
+    if(sig_len == 0 || sig_len > computed_sig.size())
+    {
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
     }
     computed_sig.resize(sig_len);
 
     if (computed_sig.size() != signature.size())
     {
+        drainOpenSSLErrors();
         return false;
     }
 
-    return CRYPTO_memcmp(computed_sig.data(), signature.data(), sig_len) == 0;
+    const bool valid =
+        CRYPTO_memcmp(computed_sig.data(), signature.data(), sig_len) == 0;
+    drainOpenSSLErrors();
+    return valid;
 }
 
 E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
@@ -448,7 +579,7 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if (!md_ctx)
     {
-        return std::unexpected(runtimeError("Failed to create MD context"));
+        return std::unexpected(openSSLFailure(SIGNATURE_CONTEXT_FAILURE));
     }
 
     EVP_PKEY_CTX* pkey_ctx = nullptr;
@@ -458,11 +589,11 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
     {
         if(profile.use_pss)
         {
-            return std::unexpected(runtimeError(
+            return std::unexpected(openSSLFailure(
                 "Incompatible RSA-PSS key restrictions"));
         }
         return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestVerifyInit failed")));
+            openSSLFailure(SIGNATURE_INITIALIZATION_FAILURE));
     }
 
     if(auto result = configureSignatureContext(pkey_ctx, profile); !result)
@@ -482,7 +613,7 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
         if (EVP_DigestVerifyUpdate(md_ctx.get(), data.data(), data.size()) <= 0)
         {
             return std::unexpected(
-                runtimeError("EVP_DigestVerifyUpdate failed"));
+                openSSLFailure(SIGNATURE_VERIFICATION_FAILURE));
         }
         ret = EVP_DigestVerifyFinal(md_ctx.get(), signature.data(),
                                     signature.size());
@@ -490,23 +621,17 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
 
     if (ret == 1)
     {
+        drainOpenSSLErrors();
         return true;
     }
     else if (ret == 0)
     {
+        drainOpenSSLErrors();
         return false;
     }
     else
     {
-        // For some algorithms (like ECDSA), an invalid signature might return
-        // -1 with an empty error queue. Treat this as a verification failure.
-        if (ERR_peek_error() == 0)
-        {
-            return false;
-        }
-
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestVerify failed")));
+        return std::unexpected(openSSLFailure(SIGNATURE_VERIFICATION_FAILURE));
     }
 }
 
@@ -514,6 +639,7 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
 
 E<std::string> HasherInterface::hashToHexStr(const std::string& bytes) const
 {
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto hash, this->hashToBytes(bytes));
     std::stringstream ss;
     for(auto byte : hash)
@@ -527,18 +653,21 @@ E<std::string> HasherInterface::hashToHexStr(const std::string& bytes) const
 E<std::vector<unsigned char>> SHA256Hasher::hashToBytes(
     const std::string& bytes) const
 {
+    OpenSSLErrorBoundary error_boundary;
     return hash(EVP_sha256(), bytes);
 }
 
 E<std::vector<unsigned char>> SHA512Hasher::hashToBytes(
     const std::string& bytes) const
 {
+    OpenSSLErrorBoundary error_boundary;
     return hash(EVP_sha512(), bytes);
 }
 
 E<std::vector<unsigned char>> SHA256HalfHasher::hashToBytes(
     const std::string& bytes) const
 {
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto hash, full_hasher.hashToBytes(bytes));
     hash.resize(hash.size() / 2);
     return hash;
@@ -548,7 +677,7 @@ E<bool> Crypto::verifySignature(SignatureAlgorithm algo, const std::string& key,
                                 const std::vector<unsigned char>& signature,
                                 const std::string& data)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto profile, signatureProfile(algo));
 
     if(profile.key_kind == SignatureKeyKind::HMAC)
@@ -566,7 +695,7 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
                                            const std::string& key,
                                            const std::string& data)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto profile, signatureProfile(algo));
 
     EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
@@ -583,7 +712,7 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if(!md_ctx)
     {
-        return std::unexpected(runtimeError("Failed to create MD context"));
+        return std::unexpected(openSSLFailure(SIGNATURE_CONTEXT_FAILURE));
     }
 
     EVP_PKEY_CTX* pkey_ctx = nullptr;
@@ -593,11 +722,11 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
     {
         if(profile.use_pss)
         {
-            return std::unexpected(runtimeError(
+            return std::unexpected(openSSLFailure(
                 "Incompatible RSA-PSS key restrictions"));
         }
         return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestSignInit failed")));
+            openSSLFailure(SIGNATURE_INITIALIZATION_FAILURE));
     }
 
     if(auto result = configureSignatureContext(pkey_ctx, profile); !result)
@@ -610,8 +739,11 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
                        reinterpret_cast<const unsigned char*>(data.data()),
                        data.size()) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestSign (length) failed")));
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
+    }
+    if(sig_len == 0)
+    {
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
     }
 
     std::vector<unsigned char> signature(sig_len);
@@ -619,8 +751,11 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
                        reinterpret_cast<const unsigned char*>(data.data()),
                        data.size()) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DigestSign failed")));
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
+    }
+    if(sig_len == 0 || sig_len > signature.size())
+    {
+        return std::unexpected(openSSLFailure(SIGNATURE_PRODUCTION_FAILURE));
     }
     signature.resize(sig_len);
 
@@ -629,7 +764,7 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
 
 E<KeyPair> Crypto::generateKeyPair(KeyType type)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
 
     int pkey_type;
     switch(type)
@@ -644,48 +779,47 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
         return std::unexpected(runtimeError("Unsupported key type"));
     }
 
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(pkey_type, nullptr);
+    EVP_PKEY_CTX_ptr ctx(EVP_PKEY_CTX_new_id(pkey_type, nullptr),
+                         EVP_PKEY_CTX_free);
     if (!ctx)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to create context")));
+            openSSLFailure(KEY_GENERATION_CONTEXT_FAILURE));
     }
-    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx_ptr(
-        ctx, EVP_PKEY_CTX_free);
 
-    if (EVP_PKEY_keygen_init(ctx) <= 0)
+    if (EVP_PKEY_keygen_init(ctx.get()) <= 0)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to init keygen")));
+            openSSLFailure(KEY_GENERATION_INITIALIZATION_FAILURE));
     }
 
     if (type == KeyType::RSA)
     {
-        if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0)
+        if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), 2048) <= 0)
         {
             return std::unexpected(
-                runtimeError(getOpenSSLError("Failed to set RSA key bits")));
+                openSSLFailure(KEY_GENERATION_INITIALIZATION_FAILURE));
         }
     }
 
     EVP_PKEY* pkey_raw = nullptr;
-    if (EVP_PKEY_keygen(ctx, &pkey_raw) <= 0)
-    {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to generate key")));
-    }
+    const int keygen_result = EVP_PKEY_keygen(ctx.get(), &pkey_raw);
     EVP_PKEY_ptr pkey(pkey_raw, EVP_PKEY_free);
+    if (keygen_result <= 0 || !pkey)
+    {
+        return std::unexpected(openSSLFailure(KEY_GENERATION_FAILURE));
+    }
 
     BIO_ptr pub_bio(BIO_new(BIO_s_mem()), BIO_free);
     if (!pub_bio)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to create public key BIO")));
+            openSSLFailure(PUBLIC_KEY_SERIALIZATION_FAILURE));
     }
-    if (!PEM_write_bio_PUBKEY(pub_bio.get(), pkey.get()))
+    if (PEM_write_bio_PUBKEY(pub_bio.get(), pkey.get()) != 1)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to write public key")));
+            openSSLFailure(PUBLIC_KEY_SERIALIZATION_FAILURE));
     }
 
     char* pub_data = nullptr;
@@ -693,21 +827,21 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
     if(pub_len <= 0 || pub_data == nullptr)
     {
         return std::unexpected(
-            runtimeError("Failed to extract public key"));
+            openSSLFailure(PUBLIC_KEY_SERIALIZATION_FAILURE));
     }
-    std::string public_key(pub_data, pub_len);
+    std::string public_key(pub_data, static_cast<size_t>(pub_len));
 
     BIO_ptr priv_bio(BIO_new(BIO_s_mem()), BIO_free);
     if (!priv_bio)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to create private key BIO")));
+            openSSLFailure(PRIVATE_KEY_SERIALIZATION_FAILURE));
     }
-    if (!PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), nullptr, nullptr,
-                                  0, nullptr, nullptr))
+    if (PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), nullptr, nullptr,
+                                 0, nullptr, nullptr) != 1)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to write private key")));
+            openSSLFailure(PRIVATE_KEY_SERIALIZATION_FAILURE));
     }
 
     char* priv_data = nullptr;
@@ -715,17 +849,17 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
     if(priv_len <= 0 || priv_data == nullptr)
     {
         return std::unexpected(
-            runtimeError("Failed to extract private key"));
+            openSSLFailure(PRIVATE_KEY_SERIALIZATION_FAILURE));
     }
-    std::string private_key(priv_data, priv_len);
+    std::string private_key(priv_data, static_cast<size_t>(priv_len));
 
-    return KeyPair{public_key, private_key};
+    return KeyPair{std::move(public_key), std::move(private_key)};
 }
 
 E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
                                const std::string& clear_content)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto cipher, encryptionCipher(algo));
 
     if (key.size() != AES_256_KEY_LEN)
@@ -733,62 +867,79 @@ E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
         return std::unexpected(runtimeError("Invalid key length for AES-256"));
     }
 
-    unsigned char iv[GCM_IV_LEN];
-    if (RAND_bytes(iv, GCM_IV_LEN) != 1)
+    if(!fitsOpenSSLInt(clear_content.size()) ||
+       clear_content.size() >
+           std::numeric_limits<size_t>::max() - EVP_MAX_BLOCK_LENGTH)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to generate random IV")));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
+    }
+
+    std::array<unsigned char, GCM_IV_LEN> iv{};
+    if (RAND_bytes(iv.data(), static_cast<int>(iv.size())) != 1)
+    {
+        return std::unexpected(openSSLFailure(RANDOM_IV_FAILURE));
     }
 
     EVP_CIPHER_CTX_ptr ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
     if (!ctx)
     {
-        return std::unexpected(
-            runtimeError("Failed to create cipher context"));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
     }
 
     if (EVP_EncryptInit_ex(
             ctx.get(), cipher, nullptr,
-            reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
+            reinterpret_cast<const unsigned char*>(key.data()), iv.data()) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_EncryptInit_ex failed")));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
     }
 
-    std::vector<unsigned char> ciphertext(clear_content.size() +
-                                          EVP_MAX_BLOCK_LENGTH);
+    const size_t ciphertext_capacity =
+        clear_content.size() + EVP_MAX_BLOCK_LENGTH;
+    std::vector<unsigned char> ciphertext(ciphertext_capacity);
     int len = 0;
     if (EVP_EncryptUpdate(
             ctx.get(), ciphertext.data(), &len,
             reinterpret_cast<const unsigned char*>(clear_content.data()),
             static_cast<int>(clear_content.size())) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_EncryptUpdate failed")));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
     }
-    int ciphertext_len = len;
-
-    if (EVP_EncryptFinal_ex(ctx.get(), ciphertext.data() + len, &len) <= 0)
+    if(len < 0 || static_cast<size_t>(len) > ciphertext_capacity)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_EncryptFinal_ex failed")));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
     }
-    ciphertext_len += len;
+    size_t ciphertext_len = static_cast<size_t>(len);
+    if(ciphertext_len > ciphertext_capacity - EVP_MAX_BLOCK_LENGTH)
+    {
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
+    }
+
+    if (EVP_EncryptFinal_ex(ctx.get(), ciphertext.data() + ciphertext_len,
+                           &len) <= 0)
+    {
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
+    }
+    if(len < 0 || static_cast<size_t>(len) >
+                     ciphertext_capacity - ciphertext_len)
+    {
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
+    }
+    ciphertext_len += static_cast<size_t>(len);
     ciphertext.resize(ciphertext_len);
 
-    unsigned char tag[GCM_TAG_LEN];
-    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, GCM_TAG_LEN,
-                            tag) <= 0)
+    std::array<unsigned char, GCM_TAG_LEN> tag{};
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG,
+                            static_cast<int>(GCM_TAG_LEN), tag.data()) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to get GCM tag")));
+        return std::unexpected(openSSLFailure(ENCRYPTION_FAILURE));
     }
 
     std::string result;
     result.reserve(GCM_IV_LEN + ciphertext_len + GCM_TAG_LEN);
-    result.append(reinterpret_cast<char*>(iv), GCM_IV_LEN);
-    result.append(reinterpret_cast<char*>(ciphertext.data()), ciphertext_len);
-    result.append(reinterpret_cast<char*>(tag), GCM_TAG_LEN);
+    result.append(reinterpret_cast<const char*>(iv.data()), iv.size());
+    result.append(reinterpret_cast<const char*>(ciphertext.data()),
+                  ciphertext.size());
+    result.append(reinterpret_cast<const char*>(tag.data()), tag.size());
 
     return result;
 }
@@ -796,7 +947,7 @@ E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
 E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
                                const std::string& encrypted_content)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
     ASSIGN_OR_RETURN(auto cipher, encryptionCipher(algo));
 
     if (key.size() != AES_256_KEY_LEN)
@@ -809,77 +960,90 @@ E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
         return std::unexpected(runtimeError("Ciphertext too short"));
     }
 
+    const size_t ciphertext_len =
+        encrypted_content.size() - GCM_IV_LEN - GCM_TAG_LEN;
+    if(!fitsOpenSSLInt(ciphertext_len) ||
+       ciphertext_len >
+           std::numeric_limits<size_t>::max() - EVP_MAX_BLOCK_LENGTH)
+    {
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
+    }
+
     const unsigned char* iv =
         reinterpret_cast<const unsigned char*>(encrypted_content.data());
     const unsigned char* ciphertext = iv + GCM_IV_LEN;
-    size_t ciphertext_len = encrypted_content.size() - GCM_IV_LEN - GCM_TAG_LEN;
     const unsigned char* tag = ciphertext + ciphertext_len;
 
     EVP_CIPHER_CTX_ptr ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
     if (!ctx)
     {
-        return std::unexpected(
-            runtimeError("Failed to create cipher context"));
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
     }
 
     if (EVP_DecryptInit_ex(
             ctx.get(), cipher, nullptr,
             reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DecryptInit_ex failed")));
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
     }
 
-    std::vector<unsigned char> plaintext(ciphertext_len + EVP_MAX_BLOCK_LENGTH);
+    crypto_detail::PlaintextBuffer plaintext(
+        ciphertext_len + EVP_MAX_BLOCK_LENGTH);
     int len = 0;
     if (EVP_DecryptUpdate(ctx.get(), plaintext.data(), &len, ciphertext,
                           static_cast<int>(ciphertext_len)) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("EVP_DecryptUpdate failed")));
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
     }
-    int plaintext_len = len;
+    if(len < 0 || static_cast<size_t>(len) > plaintext.size())
+    {
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
+    }
+    size_t plaintext_len = static_cast<size_t>(len);
+    if(plaintext_len > plaintext.size() - EVP_MAX_BLOCK_LENGTH)
+    {
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
+    }
 
-    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, GCM_TAG_LEN,
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG,
+                            static_cast<int>(GCM_TAG_LEN),
                             const_cast<unsigned char*>(tag)) <= 0)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to set GCM tag")));
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
     }
 
-    int ret = EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + len, &len);
-    if (ret > 0)
+    const int ret = EVP_DecryptFinal_ex(
+        ctx.get(), plaintext.data() + plaintext_len, &len);
+    if (ret <= 0)
     {
-        plaintext_len += len;
-        plaintext.resize(plaintext_len);
-        return std::string(reinterpret_cast<char*>(plaintext.data()),
-                           plaintext_len);
+        return std::unexpected(openSSLFailure(AUTHENTICATION_FAILURE));
     }
-    else
+    if(len < 0 || static_cast<size_t>(len) > plaintext.size() - plaintext_len)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Decryption/Authentication failed")));
+        return std::unexpected(openSSLFailure(DECRYPTION_FAILURE));
     }
+    plaintext_len += static_cast<size_t>(len);
+
+    return std::string(reinterpret_cast<const char*>(plaintext.data()),
+                       plaintext_len);
 }
 
 E<std::vector<unsigned char>> Crypto::deriveKeyArgon2id(
     const std::string& password, const std::string& salt, uint32_t iterations,
     uint32_t memory_kb, uint32_t parallelism, size_t key_length)
 {
-    ERR_clear_error();
+    OpenSSLErrorBoundary error_boundary;
 
     EVP_KDF_ptr kdf(EVP_KDF_fetch(nullptr, "ARGON2ID", nullptr), EVP_KDF_free);
     if(!kdf)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to fetch ARGON2ID KDF")));
+        return std::unexpected(openSSLFailure(ARGON2ID_UNAVAILABLE));
     }
 
     EVP_KDF_CTX_ptr kctx(EVP_KDF_CTX_new(kdf.get()), EVP_KDF_CTX_free);
     if(!kctx)
     {
-        return std::unexpected(
-            runtimeError(getOpenSSLError("Failed to create KDF context")));
+        return std::unexpected(openSSLFailure(ARGON2ID_UNAVAILABLE));
     }
 
     std::vector<OSSL_PARAM> params;
@@ -901,7 +1065,7 @@ E<std::vector<unsigned char>> Crypto::deriveKeyArgon2id(
                        params.data()) <= 0)
     {
         return std::unexpected(
-            runtimeError(getOpenSSLError("KDF derivation failed")));
+            openSSLFailure(ARGON2ID_DERIVATION_FAILURE));
     }
 
     return derived_key;

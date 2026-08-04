@@ -1,4 +1,7 @@
+#include <algorithm>
+#include <cstring>
 #include <future>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -6,11 +9,13 @@
 #include <gmock/gmock.h>
 
 #include <openssl/evp.h>
+#include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <openssl/ec.h>
 
 #include "crypto.hpp"
+#include "crypto_internal.hpp"
 #include "test_utils.hpp"
 
 using ::testing::ElementsAre;
@@ -32,8 +37,76 @@ using EVP_PKEY_CTX_ptr =
 using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 
+class TestOpenSSLErrorBoundary
+{
+public:
+    TestOpenSSLErrorBoundary()
+    {
+        ERR_clear_error();
+    }
+
+    ~TestOpenSSLErrorBoundary()
+    {
+        ERR_clear_error();
+    }
+};
+
+void seedOpenSSLErrorQueue()
+{
+    ERR_clear_error();
+    ERR_raise(ERR_LIB_USER, 1);
+    ERR_raise(ERR_LIB_USER, 2);
+}
+
+void expectOpenSSLErrorQueueEmpty()
+{
+    EXPECT_EQ(ERR_peek_error(), 0UL);
+}
+
+unsigned char* cleanse_observed_address = nullptr;
+size_t cleanse_observed_size = 0;
+size_t cleanse_call_count = 0;
+bool cleanse_saw_sentinel = false;
+
+void resetCleanseObservation()
+{
+    cleanse_observed_address = nullptr;
+    cleanse_observed_size = 0;
+    cleanse_call_count = 0;
+    cleanse_saw_sentinel = false;
+}
+
+void observeCleanse(void* data, size_t size)
+{
+    auto* bytes = static_cast<unsigned char*>(data);
+    cleanse_observed_address = bytes;
+    cleanse_observed_size = size;
+    ++cleanse_call_count;
+    cleanse_saw_sentinel = std::all_of(
+        bytes, bytes + size,
+        [](unsigned char byte)
+        {
+            return byte == 0xA5;
+        });
+    std::memset(data, 0, size);
+}
+
+void createAndReturnPlaintextBuffer()
+{
+    mw::crypto_detail::PlaintextBuffer buffer(32, observeCleanse);
+    std::fill_n(buffer.data(), buffer.size(), 0xA5);
+}
+
+void createAndThrowWithPlaintextBuffer()
+{
+    mw::crypto_detail::PlaintextBuffer buffer(32, observeCleanse);
+    std::fill_n(buffer.data(), buffer.size(), 0xA5);
+    throw std::runtime_error("test exception");
+}
+
 std::string getPublicKeyPEM(EVP_PKEY* pkey)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     BIO_ptr bio(BIO_new(BIO_s_mem()), BIO_free);
     if(!bio || PEM_write_bio_PUBKEY(bio.get(), pkey) <= 0)
     {
@@ -50,6 +123,7 @@ std::string getPublicKeyPEM(EVP_PKEY* pkey)
 
 std::string getPrivateKeyPEM(EVP_PKEY* pkey)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     BIO_ptr bio(BIO_new(BIO_s_mem()), BIO_free);
     if(!bio ||
        PEM_write_bio_PrivateKey(bio.get(), pkey, nullptr, nullptr, 0, nullptr,
@@ -68,6 +142,7 @@ std::string getPrivateKeyPEM(EVP_PKEY* pkey)
 
 EVP_PKEY_ptr generateKey(mw::SignatureAlgorithm algo)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_PKEY* pkey_raw = nullptr;
 
     int type = EVP_PKEY_RSA;
@@ -122,6 +197,7 @@ EVP_PKEY_ptr generateKey(mw::SignatureAlgorithm algo)
 
 EVP_PKEY_ptr generateRSAKey(int bits)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_PKEY_CTX_ptr ctx(
         EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
     if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
@@ -140,6 +216,7 @@ EVP_PKEY_ptr generateRSAKey(int bits)
 
 EVP_PKEY_ptr generateECKey(int curve_nid)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_PKEY_CTX_ptr ctx(
         EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr), EVP_PKEY_CTX_free);
     if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
@@ -158,6 +235,7 @@ EVP_PKEY_ptr generateECKey(int curve_nid)
 
 EVP_PKEY_ptr generateEd25519Key()
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_PKEY_CTX_ptr ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr),
                          EVP_PKEY_CTX_free);
     if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0)
@@ -176,6 +254,7 @@ EVP_PKEY_ptr generateEd25519Key()
 EVP_PKEY_ptr generatePSSKey(int bits, const EVP_MD* digest,
                             const EVP_MD* mgf1_digest, int salt_length)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_PKEY_CTX_ptr ctx(
         EVP_PKEY_CTX_new_id(EVP_PKEY_RSA_PSS, nullptr), EVP_PKEY_CTX_free);
     if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
@@ -238,6 +317,7 @@ bool initializeTestSigningContext(EVP_MD_CTX* md_ctx, EVP_PKEY_CTX** pkey_ctx,
                                   mw::SignatureAlgorithm algo,
                                   const EVP_MD* digest, EVP_PKEY* pkey)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     if(EVP_DigestSignInit(md_ctx, pkey_ctx, digest, nullptr, pkey) <= 0)
     {
         return false;
@@ -260,6 +340,7 @@ bool initializeTestSigningContext(EVP_MD_CTX* md_ctx, EVP_PKEY_CTX** pkey_ctx,
 std::vector<unsigned char> sign(mw::SignatureAlgorithm algo, EVP_PKEY* pkey,
                                 const std::string& data)
 {
+    TestOpenSSLErrorBoundary error_boundary;
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     if(!md_ctx)
     {
@@ -465,10 +546,18 @@ TEST(Signature, CanVerifySignatures)
         // Test invalid signature
         if (!signature.empty()) {
             signature[0] ^= 0xFF;
-            ASSIGN_OR_FAIL(bool invalid, crypto.verifySignature(
-                tc.algo, pub_key, signature, data));
-            EXPECT_FALSE(invalid)
-                << "Verified invalid signature for " << tc.name;
+            auto invalid =
+                crypto.verifySignature(tc.algo, pub_key, signature, data);
+            if(invalid)
+            {
+                EXPECT_FALSE(*invalid)
+                    << "Verified invalid signature for " << tc.name;
+            }
+            else
+            {
+                EXPECT_EQ(mw::errorMsg(invalid.error()),
+                          "Signature verification failed");
+            }
         }
     }
 }
@@ -1022,4 +1111,173 @@ TEST(KDF, Argon2idVariableLength)
 
     EXPECT_NE(std::vector<unsigned char>(key64.begin(), key64.begin() + 16),
               key16);
+}
+
+TEST(Safety, ClearsStaleOpenSSLErrorsOnSuccessfulOperations)
+{
+    mw::Crypto crypto;
+
+    seedOpenSSLErrorQueue();
+    auto hash = mw::SHA256Hasher().hashToBytes("queue boundary");
+    ASSERT_TRUE(hash);
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    auto hash_hex = mw::SHA512Hasher().hashToHexStr("queue boundary");
+    ASSERT_TRUE(hash_hex);
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    auto key_pair = crypto.generateKeyPair(mw::KeyType::ED25519);
+    ASSERT_TRUE(key_pair);
+    expectOpenSSLErrorQueueEmpty();
+
+    const std::string hmac_key(32, 'k');
+    seedOpenSSLErrorQueue();
+    auto signature = crypto.sign(mw::SignatureAlgorithm::HMAC_SHA256,
+                                 hmac_key, "queue boundary");
+    ASSERT_TRUE(signature);
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    auto valid = crypto.verifySignature(mw::SignatureAlgorithm::HMAC_SHA256,
+                                        hmac_key, *signature,
+                                        "queue boundary");
+    ASSERT_TRUE(valid);
+    EXPECT_TRUE(*valid);
+    expectOpenSSLErrorQueueEmpty();
+
+    const std::string encryption_key(32, 'e');
+    seedOpenSSLErrorQueue();
+    auto ciphertext = crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM,
+                                     encryption_key, "queue boundary");
+    ASSERT_TRUE(ciphertext);
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    auto plaintext = crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM,
+                                    encryption_key, *ciphertext);
+    ASSERT_TRUE(plaintext);
+    EXPECT_EQ(*plaintext, "queue boundary");
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    auto derived_key = crypto.deriveKeyArgon2id(
+        "queue password", "queue salt 123456", 2, 4096, 1, 32);
+    ASSERT_TRUE(derived_key);
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Safety, UsesStableMessagesAndDrainsMalformedPEMErrors)
+{
+    mw::Crypto crypto;
+    const std::string private_marker = "PRIVATE_KEY_SECRET_MARKER";
+    const std::string public_marker = "PUBLIC_KEY_SECRET_MARKER";
+
+    seedOpenSSLErrorQueue();
+    auto private_result = crypto.sign(
+        mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+        "not a private key " + private_marker, "private data");
+    ASSERT_FALSE(private_result);
+    EXPECT_EQ(mw::errorMsg(private_result.error()), "Failed to load private key");
+    EXPECT_EQ(mw::errorMsg(private_result.error()).find("error:"),
+              std::string::npos);
+    EXPECT_EQ(mw::errorMsg(private_result.error()).find(private_marker),
+              std::string::npos);
+    expectOpenSSLErrorQueueEmpty();
+
+    auto public_result = crypto.verifySignature(
+        mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+        "not a public key " + public_marker, {}, "public data");
+    ASSERT_FALSE(public_result);
+    EXPECT_EQ(mw::errorMsg(public_result.error()), "Failed to load public key");
+    EXPECT_EQ(mw::errorMsg(public_result.error()).find("error:"),
+              std::string::npos);
+    EXPECT_EQ(mw::errorMsg(public_result.error()).find(public_marker),
+              std::string::npos);
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Safety, UsesOneAuthenticationFailureForAllGCMTampering)
+{
+    mw::Crypto crypto;
+    const std::string key(32, 'k');
+    const std::string wrong_key(31, 'k');
+    const std::string plaintext = "candidate plaintext must not escape";
+
+    ASSIGN_OR_FAIL(auto ciphertext,
+                   crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                                  plaintext));
+
+    std::vector<std::string> tampered_ciphertexts;
+    auto tampered_iv = ciphertext;
+    tampered_iv[0] ^= 1;
+    tampered_ciphertexts.push_back(std::move(tampered_iv));
+
+    auto tampered_content = ciphertext;
+    tampered_content[12] ^= 1;
+    tampered_ciphertexts.push_back(std::move(tampered_content));
+
+    auto tampered_tag = ciphertext;
+    tampered_tag.back() ^= 1;
+    tampered_ciphertexts.push_back(std::move(tampered_tag));
+
+    for(auto& tampered : tampered_ciphertexts)
+    {
+        seedOpenSSLErrorQueue();
+        auto result = crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM,
+                                     key, tampered);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(mw::errorMsg(result.error()),
+                  "Ciphertext authentication failed");
+        expectOpenSSLErrorQueueEmpty();
+    }
+
+    seedOpenSSLErrorQueue();
+    auto wrong_key_result = crypto.decrypt(
+        mw::EncryptionAlgorithm::AES_256_GCM,
+        std::string(32, 'x'), ciphertext);
+    ASSERT_FALSE(wrong_key_result);
+    EXPECT_EQ(mw::errorMsg(wrong_key_result.error()),
+              "Ciphertext authentication failed");
+    expectOpenSSLErrorQueueEmpty();
+
+    auto invalid_key_result = crypto.decrypt(
+        mw::EncryptionAlgorithm::AES_256_GCM, wrong_key, ciphertext);
+    ASSERT_FALSE(invalid_key_result);
+    EXPECT_EQ(mw::errorMsg(invalid_key_result.error()),
+              "Invalid key length for AES-256");
+    expectOpenSSLErrorQueueEmpty();
+
+    auto short_result = crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM,
+                                       key, std::string(27, 'x'));
+    ASSERT_FALSE(short_result);
+    EXPECT_EQ(mw::errorMsg(short_result.error()), "Ciphertext too short");
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Safety, ClearsTemporaryPlaintextOnReturnAndUnwinding)
+{
+    constexpr size_t BUFFER_SIZE = 32;
+
+    resetCleanseObservation();
+    createAndReturnPlaintextBuffer();
+    EXPECT_EQ(cleanse_call_count, 1U);
+    EXPECT_NE(cleanse_observed_address, nullptr);
+    EXPECT_EQ(cleanse_observed_size, BUFFER_SIZE);
+    EXPECT_TRUE(cleanse_saw_sentinel);
+
+    resetCleanseObservation();
+    try
+    {
+        createAndThrowWithPlaintextBuffer();
+        FAIL() << "Expected the helper to throw";
+    }
+    catch(const std::runtime_error&)
+    {
+    }
+    EXPECT_EQ(cleanse_call_count, 1U);
+    EXPECT_NE(cleanse_observed_address, nullptr);
+    EXPECT_EQ(cleanse_observed_size, BUFFER_SIZE);
+    EXPECT_TRUE(cleanse_saw_sentinel);
 }
