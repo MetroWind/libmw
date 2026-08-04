@@ -1,4 +1,6 @@
 #include <expected>
+#include <algorithm>
+#include <array>
 #include <vector>
 #include <string>
 #include <iomanip>
@@ -13,6 +15,7 @@
 #include <openssl/kdf.h>
 #include <openssl/params.h>
 #include <openssl/core_names.h>
+#include <openssl/objects.h>
 
 #include "crypto.hpp"
 #include "error.hpp"
@@ -22,6 +25,8 @@ namespace mw
 {
 
 using EVP_PKEY_ptr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+using EVP_PKEY_CTX_ptr =
+    std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
 using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using EVP_MD_CTX_ptr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 using EVP_CIPHER_CTX_ptr =
@@ -36,6 +41,23 @@ namespace
 constexpr size_t GCM_IV_LEN = 12;
 constexpr size_t GCM_TAG_LEN = 16;
 constexpr size_t AES_256_KEY_LEN = 32;
+constexpr int MIN_RSA_BITS = 2048;
+
+enum class SignatureKeyKind
+{
+    RSA,
+    EC,
+    ED25519,
+    HMAC
+};
+
+struct SignatureProfile
+{
+    SignatureKeyKind key_kind;
+    const EVP_MD* digest;
+    int ec_curve_nid;
+    bool use_pss;
+};
 
 E<std::vector<unsigned char>> hash(const EVP_MD* digest,
                                   const std::string& bytes)
@@ -70,114 +92,314 @@ std::string getOpenSSLError(const std::string& msg)
     return msg + ": " + ERR_error_string(ERR_get_error(), nullptr);
 }
 
-E<EVP_PKEY_ptr> loadKey(SignatureAlgorithm algo, const std::string& key)
+E<SignatureProfile> signatureProfile(SignatureAlgorithm algo)
 {
-    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
-
-    if (algo == SignatureAlgorithm::HMAC_SHA256)
-    {
-        pkey.reset(EVP_PKEY_new_mac_key(
-            EVP_PKEY_HMAC, nullptr,
-            reinterpret_cast<const unsigned char*>(key.data()),
-            static_cast<int>(key.size())));
-
-        if (!pkey)
-        {
-            return std::unexpected(runtimeError("Failed to create HMAC key"));
-        }
-    }
-    else
-    {
-        BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
-                    BIO_free);
-        if (!bio)
-        {
-            return std::unexpected(runtimeError("Failed to create key BIO"));
-        }
-
-        pkey.reset(PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
-        if (!pkey)
-        {
-            return std::unexpected(
-                runtimeError(getOpenSSLError("Failed to load public key")));
-        }
-    }
-
-    return pkey;
-}
-
-E<EVP_PKEY_ptr> loadPrivateKey(SignatureAlgorithm algo, const std::string& key)
-{
-    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
-
-    if (algo == SignatureAlgorithm::HMAC_SHA256)
-    {
-        pkey.reset(EVP_PKEY_new_mac_key(
-            EVP_PKEY_HMAC, nullptr,
-            reinterpret_cast<const unsigned char*>(key.data()),
-            static_cast<int>(key.size())));
-
-        if (!pkey)
-        {
-            return std::unexpected(runtimeError("Failed to create HMAC key"));
-        }
-    }
-    else
-    {
-        BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
-                    BIO_free);
-        if (!bio)
-        {
-            return std::unexpected(runtimeError("Failed to create key BIO"));
-        }
-
-        pkey.reset(
-            PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
-        if (!pkey)
-        {
-            return std::unexpected(
-                runtimeError(getOpenSSLError("Failed to load private key")));
-        }
-    }
-
-    return pkey;
-}
-
-const EVP_MD* getDigestMethod(SignatureAlgorithm algo)
-{
-    switch (algo)
+    switch(algo)
     {
     case SignatureAlgorithm::RSA_PSS_SHA512:
-        return EVP_sha512();
+        return SignatureProfile{SignatureKeyKind::RSA, EVP_sha512(),
+                                NID_undef, true};
     case SignatureAlgorithm::RSA_V1_5_SHA256:
+        return SignatureProfile{SignatureKeyKind::RSA, EVP_sha256(),
+                                NID_undef, false};
     case SignatureAlgorithm::HMAC_SHA256:
+        return SignatureProfile{SignatureKeyKind::HMAC, EVP_sha256(),
+                                NID_undef, false};
     case SignatureAlgorithm::ECDSA_P256_SHA256:
-        return EVP_sha256();
+        return SignatureProfile{SignatureKeyKind::EC, EVP_sha256(),
+                                NID_X9_62_prime256v1, false};
     case SignatureAlgorithm::ECDSA_P384_SHA384:
-        return EVP_sha384();
+        return SignatureProfile{SignatureKeyKind::EC, EVP_sha384(),
+                                NID_secp384r1, false};
     case SignatureAlgorithm::ED25519:
-        return nullptr;
+        return SignatureProfile{SignatureKeyKind::ED25519, nullptr, NID_undef,
+                                false};
     default:
-        return nullptr;
+        return std::unexpected(
+            runtimeError("Unsupported signature algorithm"));
     }
 }
 
-E<void> configureRSAPSS(EVP_PKEY_CTX* pkey_ctx)
+E<EVP_PKEY_ptr> createHMACKey(const std::string& key)
 {
-    if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) <= 0)
+    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
+    pkey.reset(EVP_PKEY_new_mac_key(
+        EVP_PKEY_HMAC, nullptr,
+        reinterpret_cast<const unsigned char*>(key.data()),
+        static_cast<int>(key.size())));
+
+    if (!pkey)
+    {
+        return std::unexpected(runtimeError("Failed to create HMAC key"));
+    }
+
+    return pkey;
+}
+
+E<EVP_PKEY_ptr> loadPublicKeyPEM(const std::string& key)
+{
+    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
+    BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
+                BIO_free);
+    if (!bio)
+    {
+        return std::unexpected(runtimeError("Failed to create key BIO"));
+    }
+
+    pkey.reset(PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr));
+    if (!pkey)
     {
         return std::unexpected(
-            runtimeError("Failed to set RSA PSS padding"));
+            runtimeError(getOpenSSLError("Failed to load public key")));
     }
-    if (EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_DIGEST) <= 0)
+
+    return pkey;
+}
+
+E<EVP_PKEY_ptr> loadPrivateKeyPEM(const std::string& key)
+{
+    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
+    BIO_ptr bio(BIO_new_mem_buf(key.data(), static_cast<int>(key.size())),
+                BIO_free);
+    if (!bio)
+    {
+        return std::unexpected(runtimeError("Failed to create key BIO"));
+    }
+
+    pkey.reset(
+        PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
+    if (!pkey)
     {
         return std::unexpected(
-            runtimeError("Failed to set RSA PSS salt length"));
+            runtimeError(getOpenSSLError("Failed to load private key")));
     }
+
+    return pkey;
+}
+
+E<void> validateKeyType(EVP_PKEY* pkey, const SignatureProfile& profile)
+{
+    switch(profile.key_kind)
+    {
+    case SignatureKeyKind::RSA:
+        // Check RSA-PSS first. Some providers expose a PSS-only key through
+        // the general RSA name as well.
+        if(EVP_PKEY_is_a(pkey, "RSA-PSS") == 1)
+        {
+            if(!profile.use_pss)
+            {
+                return std::unexpected(runtimeError(
+                    "Incompatible key type for signature algorithm"));
+            }
+            return {};
+        }
+        if(EVP_PKEY_is_a(pkey, "RSA") == 1)
+        {
+            return {};
+        }
+        break;
+    case SignatureKeyKind::EC:
+        if(EVP_PKEY_is_a(pkey, "EC") == 1)
+        {
+            return {};
+        }
+        break;
+    case SignatureKeyKind::ED25519:
+        if(EVP_PKEY_is_a(pkey, "ED25519") == 1)
+        {
+            return {};
+        }
+        break;
+    case SignatureKeyKind::HMAC:
+        return {};
+    default:
+        break;
+    }
+
+    return std::unexpected(
+        runtimeError("Incompatible key type for signature algorithm"));
+}
+
+E<void> validateRSAKey(EVP_PKEY* pkey)
+{
+    int bits = EVP_PKEY_get_bits(pkey);
+    if(bits <= 0)
+    {
+        return std::unexpected(
+            runtimeError("Failed to determine RSA key size"));
+    }
+    if(bits < MIN_RSA_BITS)
+    {
+        return std::unexpected(
+            runtimeError("RSA key is smaller than 2048 bits"));
+    }
+
     return {};
 }
 
-E<bool> verifyHMAC(EVP_PKEY* pkey, const std::string& data,
+E<void> validateECKey(EVP_PKEY* pkey, const SignatureProfile& profile)
+{
+    std::array<char, 256> group_name{};
+    size_t group_name_length = 0;
+    if(EVP_PKEY_get_group_name(pkey, group_name.data(), group_name.size(),
+                               &group_name_length) != 1 ||
+       group_name_length >= group_name.size())
+    {
+        return std::unexpected(runtimeError("Failed to determine EC curve"));
+    }
+
+    const auto end = std::find(group_name.begin(), group_name.end(), '\0');
+    if(end == group_name.end())
+    {
+        return std::unexpected(runtimeError("Failed to determine EC curve"));
+    }
+
+    const int curve_nid = OBJ_txt2nid(group_name.data());
+    if(curve_nid != profile.ec_curve_nid)
+    {
+        return std::unexpected(
+            runtimeError("Incompatible EC curve for signature algorithm"));
+    }
+
+    return {};
+}
+
+E<void> validatePublicKey(EVP_PKEY* pkey)
+{
+    EVP_PKEY_CTX_ptr pkey_ctx(
+        EVP_PKEY_CTX_new_from_pkey(nullptr, pkey, nullptr),
+        EVP_PKEY_CTX_free);
+    if(!pkey_ctx)
+    {
+        return std::unexpected(
+            runtimeError("Failed to create public key validation context"));
+    }
+
+    const int result = EVP_PKEY_public_check(pkey_ctx.get());
+    if(result == 1)
+    {
+        return {};
+    }
+    if(result == 0)
+    {
+        return std::unexpected(runtimeError("Invalid public key"));
+    }
+
+    return std::unexpected(runtimeError("Failed to validate public key"));
+}
+
+E<void> validatePrivateKey(EVP_PKEY* pkey)
+{
+    EVP_PKEY_CTX_ptr pkey_ctx(
+        EVP_PKEY_CTX_new_from_pkey(nullptr, pkey, nullptr),
+        EVP_PKEY_CTX_free);
+    if(!pkey_ctx)
+    {
+        return std::unexpected(
+            runtimeError("Failed to create private key validation context"));
+    }
+
+    const int result = EVP_PKEY_pairwise_check(pkey_ctx.get());
+    if(result == 1)
+    {
+        return {};
+    }
+    if(result == 0)
+    {
+        return std::unexpected(runtimeError("Invalid private key"));
+    }
+
+    return std::unexpected(runtimeError("Failed to validate private key"));
+}
+
+E<void> validateAsymmetricKey(EVP_PKEY* pkey,
+                              const SignatureProfile& profile,
+                              bool private_key)
+{
+    DO_OR_RETURN(validateKeyType(pkey, profile));
+
+    switch(profile.key_kind)
+    {
+    case SignatureKeyKind::RSA:
+        DO_OR_RETURN(validateRSAKey(pkey));
+        break;
+    case SignatureKeyKind::EC:
+        DO_OR_RETURN(validateECKey(pkey, profile));
+        break;
+    case SignatureKeyKind::ED25519:
+        break;
+    case SignatureKeyKind::HMAC:
+        return {};
+    default:
+        return std::unexpected(
+            runtimeError("Incompatible key type for signature algorithm"));
+    }
+
+    if(private_key)
+    {
+        return validatePrivateKey(pkey);
+    }
+    return validatePublicKey(pkey);
+}
+
+E<void> configureSignatureContext(EVP_PKEY_CTX* pkey_ctx,
+                                  const SignatureProfile& profile)
+{
+    if(profile.key_kind != SignatureKeyKind::RSA)
+    {
+        return {};
+    }
+    if(pkey_ctx == nullptr)
+    {
+        if(profile.use_pss)
+        {
+            return std::unexpected(runtimeError(
+                "Incompatible RSA-PSS key restrictions"));
+        }
+        return std::unexpected(
+            runtimeError("Failed to create RSA signature context"));
+    }
+
+    if(profile.use_pss)
+    {
+        const int padding_result =
+            EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING);
+        const int mgf1_result =
+            EVP_PKEY_CTX_set_rsa_mgf1_md(pkey_ctx, profile.digest);
+        const int salt_length_result = EVP_PKEY_CTX_set_rsa_pss_saltlen(
+            pkey_ctx, RSA_PSS_SALTLEN_DIGEST);
+        if(padding_result <= 0 || mgf1_result <= 0 ||
+           salt_length_result <= 0)
+        {
+            return std::unexpected(runtimeError(
+                "Incompatible RSA-PSS key restrictions"));
+        }
+        return {};
+    }
+
+    if(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING) <= 0)
+    {
+        return std::unexpected(
+            runtimeError("Failed to set RSA PKCS#1 v1.5 padding"));
+    }
+
+    return {};
+}
+
+E<const EVP_CIPHER*> encryptionCipher(EncryptionAlgorithm algo)
+{
+    switch(algo)
+    {
+    case EncryptionAlgorithm::AES_256_GCM:
+        return EVP_aes_256_gcm();
+    default:
+        return std::unexpected(
+            runtimeError("Unsupported encryption algorithm"));
+    }
+}
+
+E<bool> verifyHMAC(EVP_PKEY* pkey, const SignatureProfile& profile,
+                   const std::string& data,
                    const std::vector<unsigned char>& signature)
 {
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
@@ -186,7 +408,7 @@ E<bool> verifyHMAC(EVP_PKEY* pkey, const std::string& data,
         return std::unexpected(runtimeError("Failed to create MD context"));
     }
 
-    if (EVP_DigestSignInit(md_ctx.get(), nullptr, EVP_sha256(), nullptr,
+    if(EVP_DigestSignInit(md_ctx.get(), nullptr, profile.digest, nullptr,
                            pkey) <= 0)
     {
         return std::unexpected(
@@ -219,7 +441,7 @@ E<bool> verifyHMAC(EVP_PKEY* pkey, const std::string& data,
     return CRYPTO_memcmp(computed_sig.data(), signature.data(), sig_len) == 0;
 }
 
-E<bool> verifyAsymmetric(EVP_PKEY* pkey, SignatureAlgorithm algo,
+E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
                          const std::string& data,
                          const std::vector<unsigned char>& signature)
 {
@@ -229,32 +451,27 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, SignatureAlgorithm algo,
         return std::unexpected(runtimeError("Failed to create MD context"));
     }
 
-    const EVP_MD* md = getDigestMethod(algo);
     EVP_PKEY_CTX* pkey_ctx = nullptr;
 
-    if (EVP_DigestVerifyInit(md_ctx.get(), &pkey_ctx, md, nullptr, pkey) <= 0)
+    if(EVP_DigestVerifyInit(md_ctx.get(), &pkey_ctx, profile.digest, nullptr,
+                            pkey) <= 0)
     {
+        if(profile.use_pss)
+        {
+            return std::unexpected(runtimeError(
+                "Incompatible RSA-PSS key restrictions"));
+        }
         return std::unexpected(
             runtimeError(getOpenSSLError("EVP_DigestVerifyInit failed")));
     }
 
-    if (algo == SignatureAlgorithm::RSA_PSS_SHA512)
+    if(auto result = configureSignatureContext(pkey_ctx, profile); !result)
     {
-        if (auto result = configureRSAPSS(pkey_ctx); !result)
-        {
-            return std::unexpected(result.error());
-        }
-    }
-
-    // Check parameters for EC/DSA
-    if (EVP_PKEY_id(pkey) == EVP_PKEY_EC &&
-        EVP_PKEY_missing_parameters(pkey))
-    {
-        return std::unexpected(runtimeError("Key missing parameters"));
+        return std::unexpected(result.error());
     }
 
     int ret = 0;
-    if (algo == SignatureAlgorithm::ED25519)
+    if(profile.key_kind == SignatureKeyKind::ED25519)
     {
         ret = EVP_DigestVerify(
             md_ctx.get(), signature.data(), signature.size(),
@@ -332,14 +549,17 @@ E<bool> Crypto::verifySignature(SignatureAlgorithm algo, const std::string& key,
                                 const std::string& data)
 {
     ERR_clear_error();
-    ASSIGN_OR_RETURN(auto pkey, loadKey(algo, key));
+    ASSIGN_OR_RETURN(auto profile, signatureProfile(algo));
 
-    if (algo == SignatureAlgorithm::HMAC_SHA256)
+    if(profile.key_kind == SignatureKeyKind::HMAC)
     {
-        return verifyHMAC(pkey.get(), data, signature);
+        ASSIGN_OR_RETURN(auto pkey, createHMACKey(key));
+        return verifyHMAC(pkey.get(), profile, data, signature);
     }
 
-    return verifyAsymmetric(pkey.get(), algo, data, signature);
+    ASSIGN_OR_RETURN(auto pkey, loadPublicKeyPEM(key));
+    DO_OR_RETURN(validateAsymmetricKey(pkey.get(), profile, false));
+    return verifyAsymmetric(pkey.get(), profile, data, signature);
 }
 
 E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
@@ -347,37 +567,42 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
                                            const std::string& data)
 {
     ERR_clear_error();
-    ASSIGN_OR_RETURN(auto pkey, loadPrivateKey(algo, key));
+    ASSIGN_OR_RETURN(auto profile, signatureProfile(algo));
+
+    EVP_PKEY_ptr pkey(nullptr, EVP_PKEY_free);
+    if(profile.key_kind == SignatureKeyKind::HMAC)
+    {
+        ASSIGN_OR_RETURN(pkey, createHMACKey(key));
+    }
+    else
+    {
+        ASSIGN_OR_RETURN(pkey, loadPrivateKeyPEM(key));
+        DO_OR_RETURN(validateAsymmetricKey(pkey.get(), profile, true));
+    }
 
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (!md_ctx)
+    if(!md_ctx)
     {
         return std::unexpected(runtimeError("Failed to create MD context"));
     }
 
-    const EVP_MD* md = getDigestMethod(algo);
     EVP_PKEY_CTX* pkey_ctx = nullptr;
 
-    if (EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, md, nullptr, pkey.get()) <=
-        0)
+    if(EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, profile.digest, nullptr,
+                          pkey.get()) <= 0)
     {
+        if(profile.use_pss)
+        {
+            return std::unexpected(runtimeError(
+                "Incompatible RSA-PSS key restrictions"));
+        }
         return std::unexpected(
             runtimeError(getOpenSSLError("EVP_DigestSignInit failed")));
     }
 
-    if (algo == SignatureAlgorithm::RSA_PSS_SHA512)
+    if(auto result = configureSignatureContext(pkey_ctx, profile); !result)
     {
-        if (auto result = configureRSAPSS(pkey_ctx); !result)
-        {
-            return std::unexpected(result.error());
-        }
-    }
-
-    // Check parameters for EC/DSA
-    if (EVP_PKEY_id(pkey.get()) == EVP_PKEY_EC &&
-        EVP_PKEY_missing_parameters(pkey.get()))
-    {
-        return std::unexpected(runtimeError("Key missing parameters"));
+        return std::unexpected(result.error());
     }
 
     size_t sig_len = 0;
@@ -404,10 +629,19 @@ E<std::vector<unsigned char>> Crypto::sign(SignatureAlgorithm algo,
 
 E<KeyPair> Crypto::generateKeyPair(KeyType type)
 {
-    int pkey_type = EVP_PKEY_ED25519;
-    if (type == KeyType::RSA)
+    ERR_clear_error();
+
+    int pkey_type;
+    switch(type)
     {
+    case KeyType::ED25519:
+        pkey_type = EVP_PKEY_ED25519;
+        break;
+    case KeyType::RSA:
         pkey_type = EVP_PKEY_RSA;
+        break;
+    default:
+        return std::unexpected(runtimeError("Unsupported key type"));
     }
 
     EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(pkey_type, nullptr);
@@ -454,8 +688,13 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
             runtimeError(getOpenSSLError("Failed to write public key")));
     }
 
-    char* pub_data;
+    char* pub_data = nullptr;
     long pub_len = BIO_get_mem_data(pub_bio.get(), &pub_data);
+    if(pub_len <= 0 || pub_data == nullptr)
+    {
+        return std::unexpected(
+            runtimeError("Failed to extract public key"));
+    }
     std::string public_key(pub_data, pub_len);
 
     BIO_ptr priv_bio(BIO_new(BIO_s_mem()), BIO_free);
@@ -471,8 +710,13 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
             runtimeError(getOpenSSLError("Failed to write private key")));
     }
 
-    char* priv_data;
+    char* priv_data = nullptr;
     long priv_len = BIO_get_mem_data(priv_bio.get(), &priv_data);
+    if(priv_len <= 0 || priv_data == nullptr)
+    {
+        return std::unexpected(
+            runtimeError("Failed to extract private key"));
+    }
     std::string private_key(priv_data, priv_len);
 
     return KeyPair{public_key, private_key};
@@ -481,10 +725,8 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
 E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
                                const std::string& clear_content)
 {
-    if (algo != EncryptionAlgorithm::AES_256_GCM)
-    {
-        return std::unexpected(runtimeError("Unsupported encryption algorithm"));
-    }
+    ERR_clear_error();
+    ASSIGN_OR_RETURN(auto cipher, encryptionCipher(algo));
 
     if (key.size() != AES_256_KEY_LEN)
     {
@@ -506,7 +748,7 @@ E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
     }
 
     if (EVP_EncryptInit_ex(
-            ctx.get(), EVP_aes_256_gcm(), nullptr,
+            ctx.get(), cipher, nullptr,
             reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
     {
         return std::unexpected(
@@ -554,10 +796,8 @@ E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
 E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
                                const std::string& encrypted_content)
 {
-    if (algo != EncryptionAlgorithm::AES_256_GCM)
-    {
-        return std::unexpected(runtimeError("Unsupported encryption algorithm"));
-    }
+    ERR_clear_error();
+    ASSIGN_OR_RETURN(auto cipher, encryptionCipher(algo));
 
     if (key.size() != AES_256_KEY_LEN)
     {
@@ -583,7 +823,7 @@ E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
     }
 
     if (EVP_DecryptInit_ex(
-            ctx.get(), EVP_aes_256_gcm(), nullptr,
+            ctx.get(), cipher, nullptr,
             reinterpret_cast<const unsigned char*>(key.data()), iv) <= 0)
     {
         return std::unexpected(

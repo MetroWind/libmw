@@ -107,58 +107,86 @@ private:
 
 enum class SignatureAlgorithm
 {
+    /// RSA-PSS with SHA-512, MGF1-SHA-512, and a digest-length salt.
     RSA_PSS_SHA512,
+
+    /// RSA PKCS#1 v1.5 signatures with SHA-256.
     RSA_V1_5_SHA256,
+
+    /// HMAC with SHA-256 over an opaque raw-byte key.
     HMAC_SHA256,
+
+    /// ECDSA with SHA-256 on the NIST P-256 curve.
     ECDSA_P256_SHA256,
+
+    /// ECDSA with SHA-384 on the NIST P-384 curve.
     ECDSA_P384_SHA384,
+
+    /// Ed25519 signatures without an external digest.
     ED25519
 };
 
 enum class KeyType
 {
+    /// An Ed25519 signing key pair.
     ED25519,
+
+    /// A general RSA-2048 signing key pair.
     RSA
 };
 
 enum class EncryptionAlgorithm
 {
+    /// AES-256-GCM authenticated encryption.
     AES_256_GCM
 };
 
+/// A PEM-encoded public and private asymmetric key pair.
 struct KeyPair
 {
     std::string public_key;
     std::string private_key;
 };
 
+/// The interface for hashing, signatures, key generation, and encryption.
 class CryptoInterface
 {
 public:
     virtual ~CryptoInterface() = default;
 
-    /// @brief Verifies the signature of the data using the provided key and
-    /// algorithm.
+    /// Verify data with a supported signature algorithm and key.
     ///
     /// @param algo The signature algorithm to use.
-    /// @param key The key to verify with. For asymmetric algorithms, this should
-    /// be a PEM encoded public key. For HMAC, this is the raw key bytes.
+    /// @param key The verification key. Asymmetric algorithms require a PEM
+    /// encoded public key. HMAC treats this as opaque raw key bytes.
     /// @param signature The signature to verify.
     /// @param data The data that was signed.
-    /// @return True if the signature is valid, False if invalid. Returns an error
-    /// if verification could not be performed (e.g. invalid key format).
+    /// @return True if the signature is valid, false if it is invalid. Returns
+    /// an error for an unsupported algorithm, malformed key, incompatible key,
+    /// or unusable key.
+    ///
+    /// RSA-PSS accepts general RSA or compatible RSA-PSS keys of at least 2,048
+    /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
+    /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
+    /// requires an Ed25519 public key.
     virtual E<bool> verifySignature(
         SignatureAlgorithm algo, const std::string& key,
         const std::vector<unsigned char>& signature,
         const std::string& data) = 0;
 
-    /// @brief Signs the data using the provided key and algorithm.
+    /// Sign data with a supported signature algorithm and key.
     ///
     /// @param algo The signature algorithm to use.
-    /// @param key The private key to sign with. For asymmetric algorithms, this
-    /// should be a PEM encoded private key.
+    /// @param key The signing key. Asymmetric algorithms require a PEM encoded
+    /// private key. HMAC treats this as opaque raw key bytes.
     /// @param data The data to sign.
-    /// @return The signature bytes, or an error if signing failed.
+    /// @return The signature bytes, or an error for an unsupported algorithm,
+    /// malformed key, incompatible key, or unusable key.
+    ///
+    /// RSA-PSS accepts general RSA or compatible RSA-PSS keys of at least 2,048
+    /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
+    /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
+    /// requires an Ed25519 private key.
     virtual E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
                                                const std::string& key,
                                                const std::string& data) = 0;

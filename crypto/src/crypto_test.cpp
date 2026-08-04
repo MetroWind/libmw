@@ -35,19 +35,34 @@ using BIO_ptr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 std::string getPublicKeyPEM(EVP_PKEY* pkey)
 {
     BIO_ptr bio(BIO_new(BIO_s_mem()), BIO_free);
-    PEM_write_bio_PUBKEY(bio.get(), pkey);
-    char* data;
+    if(!bio || PEM_write_bio_PUBKEY(bio.get(), pkey) <= 0)
+    {
+        return {};
+    }
+    char* data = nullptr;
     long len = BIO_get_mem_data(bio.get(), &data);
+    if(len <= 0 || data == nullptr)
+    {
+        return {};
+    }
     return std::string(data, len);
 }
 
 std::string getPrivateKeyPEM(EVP_PKEY* pkey)
 {
     BIO_ptr bio(BIO_new(BIO_s_mem()), BIO_free);
-    PEM_write_bio_PrivateKey(bio.get(), pkey, nullptr, nullptr, 0, nullptr,
-                             nullptr);
-    char* data;
+    if(!bio ||
+       PEM_write_bio_PrivateKey(bio.get(), pkey, nullptr, nullptr, 0, nullptr,
+                                nullptr) <= 0)
+    {
+        return {};
+    }
+    char* data = nullptr;
     long len = BIO_get_mem_data(bio.get(), &data);
+    if(len <= 0 || data == nullptr)
+    {
+        return {};
+    }
     return std::string(data, len);
 }
 
@@ -73,65 +88,227 @@ EVP_PKEY_ptr generateKey(mw::SignatureAlgorithm algo)
     }
 
     EVP_PKEY_CTX_ptr ctx(EVP_PKEY_CTX_new_id(type, nullptr), EVP_PKEY_CTX_free);
-    EVP_PKEY_keygen_init(ctx.get());
+    if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
 
     if (algo == mw::SignatureAlgorithm::RSA_PSS_SHA512 ||
         algo == mw::SignatureAlgorithm::RSA_V1_5_SHA256) {
-        EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), 2048);
+        if(EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), 2048) <= 0)
+        {
+            return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+        }
     } else if (algo == mw::SignatureAlgorithm::ECDSA_P256_SHA256) {
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx.get(), NID_X9_62_prime256v1);
+        if(EVP_PKEY_CTX_set_ec_paramgen_curve_nid(
+               ctx.get(), NID_X9_62_prime256v1) <= 0)
+        {
+            return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+        }
     } else if (algo == mw::SignatureAlgorithm::ECDSA_P384_SHA384) {
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx.get(), NID_secp384r1);
+        if(EVP_PKEY_CTX_set_ec_paramgen_curve_nid(
+               ctx.get(), NID_secp384r1) <= 0)
+        {
+            return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+        }
     }
 
-    EVP_PKEY_keygen(ctx.get(), &pkey_raw);
+    if(EVP_PKEY_keygen(ctx.get(), &pkey_raw) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
     return EVP_PKEY_ptr(pkey_raw, EVP_PKEY_free);
 }
 
-std::vector<unsigned char> sign(mw::SignatureAlgorithm algo, EVP_PKEY* pkey, const std::string& data)
+EVP_PKEY_ptr generateRSAKey(int bits)
+{
+    EVP_PKEY_CTX_ptr ctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+    if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
+       EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), bits) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+
+    EVP_PKEY* pkey_raw = nullptr;
+    if(EVP_PKEY_keygen(ctx.get(), &pkey_raw) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    return EVP_PKEY_ptr(pkey_raw, EVP_PKEY_free);
+}
+
+EVP_PKEY_ptr generateECKey(int curve_nid)
+{
+    EVP_PKEY_CTX_ptr ctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr), EVP_PKEY_CTX_free);
+    if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
+       EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx.get(), curve_nid) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+
+    EVP_PKEY* pkey_raw = nullptr;
+    if(EVP_PKEY_keygen(ctx.get(), &pkey_raw) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    return EVP_PKEY_ptr(pkey_raw, EVP_PKEY_free);
+}
+
+EVP_PKEY_ptr generateEd25519Key()
+{
+    EVP_PKEY_CTX_ptr ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr),
+                         EVP_PKEY_CTX_free);
+    if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+
+    EVP_PKEY* pkey_raw = nullptr;
+    if(EVP_PKEY_keygen(ctx.get(), &pkey_raw) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    return EVP_PKEY_ptr(pkey_raw, EVP_PKEY_free);
+}
+
+EVP_PKEY_ptr generatePSSKey(int bits, const EVP_MD* digest,
+                            const EVP_MD* mgf1_digest, int salt_length)
+{
+    EVP_PKEY_CTX_ptr ctx(
+        EVP_PKEY_CTX_new_id(EVP_PKEY_RSA_PSS, nullptr), EVP_PKEY_CTX_free);
+    if(!ctx || EVP_PKEY_keygen_init(ctx.get()) <= 0 ||
+       EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), bits) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    if(digest != nullptr &&
+       EVP_PKEY_CTX_set_rsa_pss_keygen_md(ctx.get(), digest) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    if(mgf1_digest != nullptr &&
+       EVP_PKEY_CTX_set_rsa_pss_keygen_mgf1_md(ctx.get(), mgf1_digest) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    if(salt_length >= 0 &&
+       EVP_PKEY_CTX_set_rsa_pss_keygen_saltlen(ctx.get(), salt_length) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+
+    EVP_PKEY* pkey_raw = nullptr;
+    if(EVP_PKEY_keygen(ctx.get(), &pkey_raw) <= 0)
+    {
+        return EVP_PKEY_ptr(nullptr, EVP_PKEY_free);
+    }
+    return EVP_PKEY_ptr(pkey_raw, EVP_PKEY_free);
+}
+
+struct KeyMaterial
+{
+    std::string public_key;
+    std::string private_key;
+};
+
+KeyMaterial getKeyMaterial(EVP_PKEY* pkey)
+{
+    return KeyMaterial{getPublicKeyPEM(pkey), getPrivateKeyPEM(pkey)};
+}
+
+template<typename T>
+void expectError(const mw::E<T>& result, const std::string& message)
+{
+    ASSERT_FALSE(result.has_value());
+    if(!result.has_value())
+    {
+        EXPECT_EQ(mw::errorMsg(result.error()), message);
+    }
+}
+
+template<typename T>
+void expectAnyError(const mw::E<T>& result)
+{
+    EXPECT_FALSE(result.has_value());
+}
+
+bool initializeTestSigningContext(EVP_MD_CTX* md_ctx, EVP_PKEY_CTX** pkey_ctx,
+                                  mw::SignatureAlgorithm algo,
+                                  const EVP_MD* digest, EVP_PKEY* pkey)
+{
+    if(EVP_DigestSignInit(md_ctx, pkey_ctx, digest, nullptr, pkey) <= 0)
+    {
+        return false;
+    }
+    if(algo == mw::SignatureAlgorithm::RSA_PSS_SHA512 && pkey_ctx == nullptr)
+    {
+        return false;
+    }
+    if(algo == mw::SignatureAlgorithm::RSA_PSS_SHA512 &&
+       (EVP_PKEY_CTX_set_rsa_padding(*pkey_ctx, RSA_PKCS1_PSS_PADDING) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_mgf1_md(*pkey_ctx, EVP_sha512()) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_pss_saltlen(*pkey_ctx, RSA_PSS_SALTLEN_DIGEST) <=
+            0))
+    {
+        return false;
+    }
+    return true;
+}
+
+std::vector<unsigned char> sign(mw::SignatureAlgorithm algo, EVP_PKEY* pkey,
+                                const std::string& data)
 {
     EVP_MD_CTX_ptr md_ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if(!md_ctx)
+    {
+        return {};
+    }
     const EVP_MD* md = nullptr;
     EVP_PKEY_CTX* pkey_ctx = nullptr;
 
-    switch (algo) {
-        case mw::SignatureAlgorithm::RSA_PSS_SHA512:
-            md = EVP_sha512();
-            break;
-        case mw::SignatureAlgorithm::RSA_V1_5_SHA256:
-        case mw::SignatureAlgorithm::HMAC_SHA256:
-        case mw::SignatureAlgorithm::ECDSA_P256_SHA256:
-            md = EVP_sha256();
-            break;
-        case mw::SignatureAlgorithm::ECDSA_P384_SHA384:
-            md = EVP_sha384();
-            break;
-        case mw::SignatureAlgorithm::ED25519:
-            md = nullptr;
-            break;
+    switch(algo)
+    {
+    case mw::SignatureAlgorithm::RSA_PSS_SHA512:
+        md = EVP_sha512();
+        break;
+    case mw::SignatureAlgorithm::RSA_V1_5_SHA256:
+    case mw::SignatureAlgorithm::HMAC_SHA256:
+    case mw::SignatureAlgorithm::ECDSA_P256_SHA256:
+        md = EVP_sha256();
+        break;
+    case mw::SignatureAlgorithm::ECDSA_P384_SHA384:
+        md = EVP_sha384();
+        break;
+    case mw::SignatureAlgorithm::ED25519:
+        md = nullptr;
+        break;
     }
 
-    auto init_sign = [&]() {
-        EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, md, nullptr, pkey);
-        if (algo == mw::SignatureAlgorithm::RSA_PSS_SHA512) {
-            EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING);
-            EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_DIGEST);
-        }
-    };
-
-    init_sign();
+    if(!initializeTestSigningContext(md_ctx.get(), &pkey_ctx, algo, md, pkey))
+    {
+        return {};
+    }
     size_t sig_len = 0;
-    if (EVP_DigestSign(md_ctx.get(), nullptr, &sig_len, reinterpret_cast<const unsigned char*>(data.data()), data.size()) <= 0)
+    if(EVP_DigestSign(md_ctx.get(), nullptr, &sig_len,
+                      reinterpret_cast<const unsigned char*>(data.data()),
+                      data.size()) <= 0)
     {
         return {};
     }
 
     // Re-initialize for the actual signing
-    EVP_MD_CTX_reset(md_ctx.get());
-    init_sign();
+    if(EVP_MD_CTX_reset(md_ctx.get()) <= 0 ||
+       !initializeTestSigningContext(md_ctx.get(), &pkey_ctx, algo, md, pkey))
+    {
+        return {};
+    }
 
     std::vector<unsigned char> signature(sig_len);
-    if (EVP_DigestSign(md_ctx.get(), signature.data(), &sig_len, reinterpret_cast<const unsigned char*>(data.data()), data.size()) <= 0)
+    if(EVP_DigestSign(md_ctx.get(), signature.data(), &sig_len,
+                      reinterpret_cast<const unsigned char*>(data.data()),
+                      data.size()) <= 0)
     {
         return {};
     }
@@ -153,7 +330,8 @@ TEST(Hash, CanHashSHA256)
 
     ASSIGN_OR_FAIL(std::string result, mw::SHA256Hasher().hashToHexStr("aaa"));
     EXPECT_EQ(result,
-              "9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0");
+              "9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af10"
+              "7ee8f0");
 }
 
 TEST(Hash, CanHashSHA256Half)
@@ -185,7 +363,8 @@ TEST(Hash, CanHashSHA512)
     ASSIGN_OR_FAIL(std::string result, mw::SHA512Hasher().hashToHexStr("aaa"));
     EXPECT_EQ(result,
               "d6f644b19812e97b5d871658d6d3400ecd4787faeb9b8990c1e7608288664be7"
-              "7257104a58d033bcf1a0e0945ff06468ebe53e2dff36e248424c7273117dac09");
+              "7257104a58d033bcf1a0e0945ff06468ebe53e2dff36e248424c7273117d"
+              "ac09");
 }
 
 TEST(Hash, InstancesMayBeUsedConcurrently)
@@ -280,14 +459,16 @@ TEST(Signature, CanVerifySignatures)
         mw::Crypto crypto;
         ASSIGN_OR_FAIL(bool valid, crypto.verifySignature(
             tc.algo, pub_key, signature, data));
-        EXPECT_TRUE(valid) << "Failed to verify valid signature for " << tc.name;
+        EXPECT_TRUE(valid)
+            << "Failed to verify valid signature for " << tc.name;
 
         // Test invalid signature
         if (!signature.empty()) {
             signature[0] ^= 0xFF;
             ASSIGN_OR_FAIL(bool invalid, crypto.verifySignature(
                 tc.algo, pub_key, signature, data));
-            EXPECT_FALSE(invalid) << "Verified invalid signature for " << tc.name;
+            EXPECT_FALSE(invalid)
+                << "Verified invalid signature for " << tc.name;
         }
     }
 }
@@ -308,12 +489,29 @@ TEST(Signature, CanVerifyHMAC)
     ASSERT_FALSE(signature.empty());
 
     mw::Crypto crypto;
-    ASSIGN_OR_FAIL(bool valid, crypto.verifySignature(algo, key, signature, data));
+    ASSIGN_OR_FAIL(bool valid,
+                   crypto.verifySignature(algo, key, signature, data));
     EXPECT_TRUE(valid);
 
     signature[0] ^= 0xFF;
-    ASSIGN_OR_FAIL(bool invalid, crypto.verifySignature(algo, key, signature, data));
+    ASSIGN_OR_FAIL(bool invalid,
+                   crypto.verifySignature(algo, key, signature, data));
     EXPECT_FALSE(invalid);
+}
+
+TEST(Signature, HMACKeyIsOpaqueBytes)
+{
+    std::string key("key\0with\0nulls", 14);
+    const std::string data = "opaque HMAC key";
+    mw::Crypto crypto;
+
+    ASSIGN_OR_FAIL(auto signature,
+                   crypto.sign(mw::SignatureAlgorithm::HMAC_SHA256, key,
+                               data));
+    ASSIGN_OR_FAIL(bool valid,
+                   crypto.verifySignature(mw::SignatureAlgorithm::HMAC_SHA256,
+                                           key, signature, data));
+    EXPECT_TRUE(valid);
 }
 
 TEST(Signature, CanSignAndVerify)
@@ -343,12 +541,15 @@ TEST(Signature, CanSignAndVerify)
         std::string pub_key_pem = getPublicKeyPEM(pkey.get());
 
         mw::Crypto crypto;
-        ASSIGN_OR_FAIL(auto signature, crypto.sign(tc.algo, priv_key_pem, data));
+        ASSIGN_OR_FAIL(auto signature,
+                       crypto.sign(tc.algo, priv_key_pem, data));
 
         ASSIGN_OR_FAIL(bool valid,
-                       crypto.verifySignature(tc.algo, pub_key_pem, signature, data));
+                       crypto.verifySignature(tc.algo, pub_key_pem, signature,
+                                              data));
         EXPECT_TRUE(valid)
-            << "Failed to verify signature generated by mw::sign for " << tc.name;
+            << "Failed to verify signature generated by mw::sign for "
+            << tc.name;
     }
 
     // HMAC test
@@ -357,7 +558,8 @@ TEST(Signature, CanSignAndVerify)
         mw::SignatureAlgorithm algo = mw::SignatureAlgorithm::HMAC_SHA256;
         mw::Crypto crypto;
         ASSIGN_OR_FAIL(auto signature, crypto.sign(algo, key, data));
-        ASSIGN_OR_FAIL(bool valid, crypto.verifySignature(algo, key, signature, data));
+        ASSIGN_OR_FAIL(bool valid,
+                       crypto.verifySignature(algo, key, signature, data));
         EXPECT_TRUE(valid);
     }
 }
@@ -406,9 +608,251 @@ TEST(Signature, CanGenerateAndVerifyRSAKeyPair)
 
     // Verify using the generated public key
     ASSIGN_OR_FAIL(bool valid,
-                   crypto.verifySignature(mw::SignatureAlgorithm::RSA_PSS_SHA512,
-                                       key_pair.public_key, signature, data));
+                   crypto.verifySignature(
+                       mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                       key_pair.public_key, signature, data));
     EXPECT_TRUE(valid);
+}
+
+TEST(Signature, AcceptsCompatibleRSAPSSKeys)
+{
+    struct TestCase
+    {
+        const EVP_MD* digest;
+        const EVP_MD* mgf1_digest;
+        int salt_length;
+    };
+    const std::vector<TestCase> test_cases = {
+        {nullptr, nullptr, -1},
+        {EVP_sha512(), EVP_sha512(), 64}};
+
+    const std::string data = "RSA-PSS restriction test";
+    mw::Crypto crypto;
+    for(const auto& tc : test_cases)
+    {
+        auto pkey = generatePSSKey(2048, tc.digest, tc.mgf1_digest,
+                                   tc.salt_length);
+        ASSERT_TRUE(pkey);
+        const auto key_material = getKeyMaterial(pkey.get());
+        ASSERT_FALSE(key_material.public_key.empty());
+        ASSERT_FALSE(key_material.private_key.empty());
+
+        ASSIGN_OR_FAIL(auto signature,
+                       crypto.sign(mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                                   key_material.private_key, data));
+        ASSIGN_OR_FAIL(bool valid,
+                       crypto.verifySignature(
+                           mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                           key_material.public_key, signature, data));
+        EXPECT_TRUE(valid);
+    }
+}
+
+TEST(Signature, RejectsIncompatibleKeyTypes)
+{
+    auto rsa = generateRSAKey(2048);
+    auto p256 = generateECKey(NID_X9_62_prime256v1);
+    auto p384 = generateECKey(NID_secp384r1);
+    auto ed25519 = generateEd25519Key();
+    auto pss = generatePSSKey(2048, nullptr, nullptr, -1);
+    ASSERT_TRUE(rsa);
+    ASSERT_TRUE(p256);
+    ASSERT_TRUE(p384);
+    ASSERT_TRUE(ed25519);
+    ASSERT_TRUE(pss);
+
+    const KeyMaterial rsa_material = getKeyMaterial(rsa.get());
+    const KeyMaterial p256_material = getKeyMaterial(p256.get());
+    const KeyMaterial p384_material = getKeyMaterial(p384.get());
+    const KeyMaterial ed25519_material = getKeyMaterial(ed25519.get());
+    const KeyMaterial pss_material = getKeyMaterial(pss.get());
+
+    struct TestCase
+    {
+        mw::SignatureAlgorithm algo;
+        const KeyMaterial* key_material;
+        const char* name;
+    };
+    const std::vector<TestCase> test_cases = {
+        {mw::SignatureAlgorithm::RSA_PSS_SHA512, &p256_material, "RSA/EC"},
+        {mw::SignatureAlgorithm::RSA_PSS_SHA512, &ed25519_material,
+         "RSA/Ed25519"},
+        {mw::SignatureAlgorithm::RSA_V1_5_SHA256, &p256_material, "RSA/EC"},
+        {mw::SignatureAlgorithm::RSA_V1_5_SHA256, &ed25519_material,
+         "RSA/Ed25519"},
+        {mw::SignatureAlgorithm::ECDSA_P256_SHA256, &rsa_material, "EC/RSA"},
+        {mw::SignatureAlgorithm::ECDSA_P256_SHA256, &ed25519_material,
+         "EC/Ed25519"},
+        {mw::SignatureAlgorithm::ECDSA_P384_SHA384, &rsa_material, "EC/RSA"},
+        {mw::SignatureAlgorithm::ECDSA_P384_SHA384, &ed25519_material,
+         "EC/Ed25519"},
+        {mw::SignatureAlgorithm::ED25519, &rsa_material, "Ed25519/RSA"},
+        {mw::SignatureAlgorithm::ED25519, &p256_material, "Ed25519/EC"},
+        {mw::SignatureAlgorithm::RSA_V1_5_SHA256, &pss_material,
+         "RSA-v1.5/RSA-PSS"}};
+
+    const std::string data = "incompatible key type";
+    mw::Crypto crypto;
+    for(const auto& tc : test_cases)
+    {
+        SCOPED_TRACE(tc.name);
+        expectError(crypto.sign(tc.algo, tc.key_material->private_key, data),
+                    "Incompatible key type for signature algorithm");
+        expectError(crypto.verifySignature(tc.algo,
+                                           tc.key_material->public_key, {},
+                                           data),
+                    "Incompatible key type for signature algorithm");
+    }
+}
+
+TEST(Signature, RejectsIncompatibleECCurves)
+{
+    auto p256 = generateECKey(NID_X9_62_prime256v1);
+    auto p384 = generateECKey(NID_secp384r1);
+    ASSERT_TRUE(p256);
+    ASSERT_TRUE(p384);
+    const KeyMaterial p256_material = getKeyMaterial(p256.get());
+    const KeyMaterial p384_material = getKeyMaterial(p384.get());
+
+    const std::string data = "incompatible EC curve";
+    mw::Crypto crypto;
+
+    const auto p256_signature =
+        sign(mw::SignatureAlgorithm::ECDSA_P256_SHA256, p256.get(), data);
+    const auto p384_signature =
+        sign(mw::SignatureAlgorithm::ECDSA_P384_SHA384, p384.get(), data);
+    ASSERT_FALSE(p256_signature.empty());
+    ASSERT_FALSE(p384_signature.empty());
+
+    expectError(crypto.sign(mw::SignatureAlgorithm::ECDSA_P256_SHA256,
+                            p384_material.private_key, data),
+                "Incompatible EC curve for signature algorithm");
+    expectError(crypto.verifySignature(
+                    mw::SignatureAlgorithm::ECDSA_P256_SHA256,
+                    p384_material.public_key, p384_signature, data),
+                "Incompatible EC curve for signature algorithm");
+    expectError(crypto.sign(mw::SignatureAlgorithm::ECDSA_P384_SHA384,
+                            p256_material.private_key, data),
+                "Incompatible EC curve for signature algorithm");
+    expectError(crypto.verifySignature(
+                    mw::SignatureAlgorithm::ECDSA_P384_SHA384,
+                    p256_material.public_key, p256_signature, data),
+                "Incompatible EC curve for signature algorithm");
+}
+
+TEST(Signature, RejectsWeakRSAKeys)
+{
+    auto weak_rsa = generateRSAKey(1024);
+    ASSERT_TRUE(weak_rsa);
+    const auto key_material = getKeyMaterial(weak_rsa.get());
+    ASSERT_FALSE(key_material.public_key.empty());
+    ASSERT_FALSE(key_material.private_key.empty());
+
+    const std::vector<mw::SignatureAlgorithm> algorithms = {
+        mw::SignatureAlgorithm::RSA_PSS_SHA512,
+        mw::SignatureAlgorithm::RSA_V1_5_SHA256};
+    mw::Crypto crypto;
+    for(const auto algo : algorithms)
+    {
+        expectError(crypto.sign(algo, key_material.private_key, "weak RSA"),
+                    "RSA key is smaller than 2048 bits");
+        expectError(crypto.verifySignature(algo, key_material.public_key, {},
+                                            "weak RSA"),
+                    "RSA key is smaller than 2048 bits");
+    }
+}
+
+TEST(Signature, RejectsPSSKeysWithIncompatibleRestrictions)
+{
+    struct TestCase
+    {
+        const EVP_MD* digest;
+        const EVP_MD* mgf1_digest;
+        int salt_length;
+    };
+    const std::vector<TestCase> test_cases = {
+        {EVP_sha256(), nullptr, -1},
+        {nullptr, EVP_sha256(), -1},
+        {nullptr, nullptr, 65}};
+
+    const std::string data = "incompatible RSA-PSS restrictions";
+    mw::Crypto crypto;
+    for(const auto& tc : test_cases)
+    {
+        auto pkey = generatePSSKey(2048, tc.digest, tc.mgf1_digest,
+                                   tc.salt_length);
+        ASSERT_TRUE(pkey);
+        const auto key_material = getKeyMaterial(pkey.get());
+        ASSERT_FALSE(key_material.public_key.empty());
+        ASSERT_FALSE(key_material.private_key.empty());
+
+        expectError(crypto.sign(mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                                key_material.private_key, data),
+                    "Incompatible RSA-PSS key restrictions");
+        expectError(crypto.verifySignature(
+                        mw::SignatureAlgorithm::RSA_PSS_SHA512,
+                        key_material.public_key, {}, data),
+                    "Incompatible RSA-PSS key restrictions");
+    }
+}
+
+TEST(Signature, RejectsMalformedPEMAndPublicSigningKeys)
+{
+    auto rsa = generateRSAKey(2048);
+    auto p256 = generateECKey(NID_X9_62_prime256v1);
+    auto p384 = generateECKey(NID_secp384r1);
+    auto ed25519 = generateEd25519Key();
+    ASSERT_TRUE(rsa);
+    ASSERT_TRUE(p256);
+    ASSERT_TRUE(p384);
+    ASSERT_TRUE(ed25519);
+
+    struct TestCase
+    {
+        mw::SignatureAlgorithm algo;
+        const KeyMaterial* key_material;
+    };
+    const KeyMaterial rsa_material = getKeyMaterial(rsa.get());
+    const KeyMaterial p256_material = getKeyMaterial(p256.get());
+    const KeyMaterial p384_material = getKeyMaterial(p384.get());
+    const KeyMaterial ed25519_material = getKeyMaterial(ed25519.get());
+    const std::vector<TestCase> test_cases = {
+        {mw::SignatureAlgorithm::RSA_PSS_SHA512, &rsa_material},
+        {mw::SignatureAlgorithm::ECDSA_P256_SHA256, &p256_material},
+        {mw::SignatureAlgorithm::ECDSA_P384_SHA384, &p384_material},
+        {mw::SignatureAlgorithm::ED25519, &ed25519_material}};
+    const std::vector<std::string> malformed_keys = {
+        "", "not a PEM key", "-----BEGIN PUBLIC KEY-----\ninvalid"};
+
+    mw::Crypto crypto;
+    for(const auto& tc : test_cases)
+    {
+        for(const auto& malformed_key : malformed_keys)
+        {
+            expectAnyError(crypto.sign(tc.algo, malformed_key, "malformed"));
+            expectAnyError(
+                crypto.verifySignature(tc.algo, malformed_key, {},
+                                       "malformed"));
+        }
+
+        expectAnyError(crypto.sign(tc.algo, tc.key_material->public_key,
+                                   "public key cannot sign"));
+    }
+
+    expectAnyError(crypto.sign(mw::SignatureAlgorithm::ECDSA_P384_SHA384,
+                               p256_material.public_key, "wrong curve"));
+}
+
+TEST(Signature, RejectsUnknownSignatureAlgorithm)
+{
+    constexpr auto unknown =
+        static_cast<mw::SignatureAlgorithm>(-1);
+    mw::Crypto crypto;
+
+    expectError(crypto.sign(unknown, "not a PEM key", "unknown"),
+                "Unsupported signature algorithm");
+    expectError(crypto.verifySignature(unknown, "not a PEM key", {}, "unknown"),
+                "Unsupported signature algorithm");
 }
 
 TEST(Encryption, CanEncryptAndDecrypt)
@@ -471,6 +915,30 @@ TEST(Encryption, ReturnsErrorOnEmptyCiphertext)
 
     auto result = crypto.decrypt(algo, key, "");
     EXPECT_FALSE(result);
+}
+
+TEST(Encryption, RejectsUnknownEncryptionAlgorithm)
+{
+    constexpr auto unknown =
+        static_cast<mw::EncryptionAlgorithm>(-1);
+    const std::string key(32, 'k');
+    mw::Crypto crypto;
+
+    ASSIGN_OR_FAIL(auto ciphertext,
+                   crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                                  "valid input"));
+    expectError(crypto.encrypt(unknown, key, "valid input"),
+                "Unsupported encryption algorithm");
+    expectError(crypto.decrypt(unknown, key, ciphertext),
+                "Unsupported encryption algorithm");
+}
+
+TEST(Signature, RejectsUnknownKeyType)
+{
+    constexpr auto unknown = static_cast<mw::KeyType>(-1);
+    mw::Crypto crypto;
+
+    expectError(crypto.generateKeyPair(unknown), "Unsupported key type");
 }
 
 TEST(KDF, Argon2idConsistency)
