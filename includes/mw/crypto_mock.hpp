@@ -36,6 +36,9 @@ public:
 
     MOCK_METHOD(E<KeyPair>, generateKeyPair, (KeyType type), (override));
 
+    MOCK_METHOD(E<std::vector<std::byte>>, randomBytes,
+                (std::size_t output_size), (override));
+
     MOCK_METHOD(E<std::string>, encrypt,
                 (EncryptionAlgorithm algo, const std::string& key,
                  const std::string& clear_content),

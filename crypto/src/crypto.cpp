@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <expected>
 #include <array>
 #include <vector>
@@ -46,6 +47,8 @@ constexpr size_t GCM_TAG_LEN = 16;
 constexpr size_t AES_256_KEY_LEN = 32;
 constexpr int MIN_RSA_BITS = 2048;
 constexpr size_t ARGON2_MIN_MEMORY_PER_LANE_KB = 8;
+constexpr size_t RANDOM_REQUEST_CHUNK_SIZE = size_t{64} * 1024;
+constexpr unsigned int RANDOM_SECURITY_STRENGTH = 256;
 
 constexpr std::string_view HASH_CONTEXT_FAILURE =
     "Failed to create hash context";
@@ -76,6 +79,10 @@ constexpr std::string_view PUBLIC_KEY_SERIALIZATION_FAILURE =
 constexpr std::string_view PRIVATE_KEY_SERIALIZATION_FAILURE =
     "Failed to serialize private key";
 constexpr std::string_view RANDOM_IV_FAILURE = "Failed to generate random IV";
+constexpr std::string_view RANDOM_OUTPUT_SIZE_FAILURE =
+    "Random output is too large";
+constexpr std::string_view RANDOM_GENERATION_FAILURE =
+    "Failed to generate random bytes";
 constexpr std::string_view ENCRYPTION_FAILURE = "Encryption failed";
 constexpr std::string_view DECRYPTION_FAILURE = "Decryption failed";
 constexpr std::string_view PEM_SIZE_FAILURE = "PEM key is too large";
@@ -92,6 +99,12 @@ constexpr std::string_view AUTHENTICATION_FAILURE =
 constexpr std::string_view ARGON2ID_UNAVAILABLE = "Argon2id is unavailable";
 constexpr std::string_view ARGON2ID_DERIVATION_FAILURE =
     "Argon2id derivation failed";
+
+int privateRandomBytes(unsigned char* output, size_t output_size,
+                       unsigned int strength)
+{
+    return RAND_priv_bytes_ex(nullptr, output, output_size, strength);
+}
 
 class OpenSSLErrorBoundary
 {
@@ -655,6 +668,43 @@ E<bool> verifyAsymmetric(EVP_PKEY* pkey, const SignatureProfile& profile,
 
 } // namespace
 
+E<std::vector<std::byte>> crypto_detail::generateRandomBytes(
+    size_t output_size, RandomBytesFunction random_bytes_function,
+    CleanseFunction cleanse_function)
+{
+    OpenSSLErrorBoundary error_boundary;
+
+    if(random_bytes_function == nullptr || cleanse_function == nullptr)
+    {
+        return std::unexpected(openSSLFailure(RANDOM_GENERATION_FAILURE));
+    }
+    if(output_size > crypto_limits::MAX_RANDOM_OUTPUT_SIZE)
+    {
+        return std::unexpected(openSSLFailure(RANDOM_OUTPUT_SIZE_FAILURE));
+    }
+
+    std::vector<std::byte> output(output_size);
+    size_t offset = 0;
+    while(offset < output.size())
+    {
+        const size_t chunk_size = std::min(
+            RANDOM_REQUEST_CHUNK_SIZE, output.size() - offset);
+        auto* chunk = reinterpret_cast<unsigned char*>(
+            output.data() + offset);
+        const int result = random_bytes_function(
+            chunk, chunk_size, RANDOM_SECURITY_STRENGTH);
+        if(result != 1)
+        {
+            cleanse_function(output.data(), output.size());
+            return std::unexpected(
+                openSSLFailure(RANDOM_GENERATION_FAILURE));
+        }
+        offset += chunk_size;
+    }
+
+    return output;
+}
+
 E<std::string> HasherInterface::hashToHexStr(const std::string& bytes) const
 {
     OpenSSLErrorBoundary error_boundary;
@@ -872,6 +922,12 @@ E<KeyPair> Crypto::generateKeyPair(KeyType type)
     std::string private_key(priv_data, static_cast<size_t>(priv_len));
 
     return KeyPair{std::move(public_key), std::move(private_key)};
+}
+
+E<std::vector<std::byte>> Crypto::randomBytes(std::size_t output_size)
+{
+    OpenSSLErrorBoundary error_boundary;
+    return crypto_detail::generateRandomBytes(output_size, privateRandomBytes);
 }
 
 E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,

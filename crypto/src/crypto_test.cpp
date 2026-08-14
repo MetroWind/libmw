@@ -16,9 +16,11 @@
 
 #include "crypto.hpp"
 #include "crypto_internal.hpp"
+#include "crypto_mock.hpp"
 #include "test_utils.hpp"
 
 using ::testing::ElementsAre;
+using ::testing::Return;
 
 static_assert(std::is_copy_constructible_v<mw::SHA256Hasher>);
 static_assert(std::is_copy_assignable_v<mw::SHA256Hasher>);
@@ -68,6 +70,14 @@ size_t cleanse_observed_size = 0;
 size_t cleanse_call_count = 0;
 bool cleanse_saw_sentinel = false;
 
+constexpr size_t RANDOM_CHUNK_SIZE = size_t{64} * 1024;
+size_t random_backend_call_count = 0;
+size_t random_backend_failure_call = 0;
+int random_backend_failure_result = 0;
+bool random_backend_raise_errors = false;
+std::vector<size_t> random_backend_sizes;
+std::vector<unsigned int> random_backend_strengths;
+
 void resetCleanseObservation()
 {
     cleanse_observed_address = nullptr;
@@ -89,6 +99,50 @@ void observeCleanse(void* data, size_t size)
             return byte == 0xA5;
         });
     std::memset(data, 0, size);
+}
+
+void resetRandomBackend()
+{
+    random_backend_call_count = 0;
+    random_backend_failure_call = 0;
+    random_backend_failure_result = 0;
+    random_backend_raise_errors = false;
+    random_backend_sizes.clear();
+    random_backend_strengths.clear();
+}
+
+int deterministicRandomBytes(unsigned char* output, size_t output_size,
+                             unsigned int strength)
+{
+    ++random_backend_call_count;
+    random_backend_sizes.push_back(output_size);
+    random_backend_strengths.push_back(strength);
+    std::fill_n(output, output_size, 0xA5);
+
+    if(random_backend_call_count == random_backend_failure_call)
+    {
+        if(random_backend_raise_errors)
+        {
+            ERR_raise(ERR_LIB_USER, 3);
+            ERR_raise(ERR_LIB_USER, 4);
+        }
+        return random_backend_failure_result;
+    }
+    return 1;
+}
+
+bool generateRandomRepeatedly(mw::Crypto* crypto)
+{
+    constexpr size_t ITERATION_COUNT = 64;
+    for(size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
+    {
+        auto result = crypto->randomBytes(32);
+        if(!result || result->size() != 32)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void createAndReturnPlaintextBuffer()
@@ -1224,6 +1278,194 @@ TEST(ResourceLimits, RejectsInvalidArgon2idParameters)
     expectError(crypto.deriveKeyArgon2id("password", "somesalt12345678", 2,
                                          7, 1, 32),
                 "Invalid Argon2id parameters");
+}
+
+TEST(Random, ReturnsRequestedLengths)
+{
+    mw::Crypto crypto;
+    const std::vector<size_t> output_sizes = {
+        1, 16, 32, RANDOM_CHUNK_SIZE + 17};
+
+    for(size_t output_size : output_sizes)
+    {
+        auto result = crypto.randomBytes(output_size);
+        ASSERT_TRUE(result);
+        EXPECT_EQ(result->size(), output_size);
+    }
+}
+
+TEST(Random, ZeroLengthDoesNotCallBackend)
+{
+    resetRandomBackend();
+    auto internal_result = mw::crypto_detail::generateRandomBytes(
+        0, deterministicRandomBytes);
+    ASSERT_TRUE(internal_result);
+    EXPECT_TRUE(internal_result->empty());
+    EXPECT_EQ(random_backend_call_count, 0U);
+
+    mw::Crypto crypto;
+    auto public_result = crypto.randomBytes(0);
+    ASSERT_TRUE(public_result);
+    EXPECT_TRUE(public_result->empty());
+}
+
+TEST(Random, EnforcesOutputLimitAndChunkSize)
+{
+    const size_t output_limit = mw::crypto_limits::MAX_RANDOM_OUTPUT_SIZE;
+
+    resetRandomBackend();
+    auto below_limit = mw::crypto_detail::generateRandomBytes(
+        output_limit - 1, deterministicRandomBytes);
+    ASSERT_TRUE(below_limit);
+    EXPECT_EQ(below_limit->size(), output_limit - 1);
+    ASSERT_EQ(random_backend_sizes.size(), 16U);
+    EXPECT_EQ(random_backend_sizes.back(), RANDOM_CHUNK_SIZE - 1);
+    EXPECT_TRUE(std::all_of(
+        random_backend_strengths.begin(), random_backend_strengths.end(),
+        [](unsigned int strength)
+        {
+            return strength == 256;
+        }));
+
+    resetRandomBackend();
+    auto at_limit = mw::crypto_detail::generateRandomBytes(
+        output_limit, deterministicRandomBytes);
+    ASSERT_TRUE(at_limit);
+    EXPECT_EQ(at_limit->size(), output_limit);
+    ASSERT_EQ(random_backend_sizes.size(), 16U);
+    EXPECT_TRUE(std::all_of(
+        random_backend_sizes.begin(), random_backend_sizes.end(),
+        [](size_t output_size)
+        {
+            return output_size == RANDOM_CHUNK_SIZE;
+        }));
+
+    resetRandomBackend();
+    auto above_limit = mw::crypto_detail::generateRandomBytes(
+        output_limit + 1, deterministicRandomBytes);
+    expectError(above_limit, "Random output is too large");
+    EXPECT_EQ(random_backend_call_count, 0U);
+
+    mw::Crypto crypto;
+    expectError(crypto.randomBytes(output_limit + 1),
+                "Random output is too large");
+}
+
+TEST(Random, CleansesOutputAndDrainsErrorsOnBackendFailure)
+{
+    resetRandomBackend();
+    resetCleanseObservation();
+    random_backend_failure_call = 1;
+    random_backend_failure_result = 0;
+    random_backend_raise_errors = true;
+
+    auto result = mw::crypto_detail::generateRandomBytes(
+        32, deterministicRandomBytes, observeCleanse);
+    expectError(result, "Failed to generate random bytes");
+    EXPECT_EQ(random_backend_call_count, 1U);
+    EXPECT_EQ(cleanse_call_count, 1U);
+    EXPECT_EQ(cleanse_observed_size, 32U);
+    EXPECT_TRUE(cleanse_saw_sentinel);
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Random, TreatsNegativeBackendResultAsFailure)
+{
+    resetRandomBackend();
+    resetCleanseObservation();
+    random_backend_failure_call = 1;
+    random_backend_failure_result = -1;
+
+    auto result = mw::crypto_detail::generateRandomBytes(
+        32, deterministicRandomBytes, observeCleanse);
+    expectError(result, "Failed to generate random bytes");
+    EXPECT_EQ(cleanse_call_count, 1U);
+    EXPECT_TRUE(cleanse_saw_sentinel);
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Random, CleansesCompleteAllocationAfterPartialFailure)
+{
+    const size_t output_size = RANDOM_CHUNK_SIZE + 17;
+    resetRandomBackend();
+    resetCleanseObservation();
+    random_backend_failure_call = 2;
+    random_backend_failure_result = 0;
+
+    auto result = mw::crypto_detail::generateRandomBytes(
+        output_size, deterministicRandomBytes, observeCleanse);
+    expectError(result, "Failed to generate random bytes");
+    EXPECT_EQ(random_backend_call_count, 2U);
+    EXPECT_EQ(cleanse_call_count, 1U);
+    EXPECT_EQ(cleanse_observed_size, output_size);
+    EXPECT_TRUE(cleanse_saw_sentinel);
+}
+
+TEST(Random, RejectsNullBackend)
+{
+    auto result = mw::crypto_detail::generateRandomBytes(32, nullptr);
+    expectError(result, "Failed to generate random bytes");
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Random, CanBeSubstitutedThroughInterface)
+{
+    mw::CryptoMock crypto;
+    const std::vector<std::byte> expected = {
+        std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
+    EXPECT_CALL(crypto, randomBytes(expected.size()))
+        .WillOnce(Return(mw::E<std::vector<std::byte>>(expected)));
+
+    mw::CryptoInterface& interface = crypto;
+    auto result = interface.randomBytes(expected.size());
+    ASSERT_TRUE(result);
+    EXPECT_EQ(*result, expected);
+}
+
+TEST(Random, IndependentOutputsDifferAsSmokeCheck)
+{
+    mw::Crypto crypto;
+    ASSIGN_OR_FAIL(auto first, crypto.randomBytes(32));
+    ASSIGN_OR_FAIL(auto second, crypto.randomBytes(32));
+
+    // This catches obvious repetition; it is not a statistical RNG test.
+    EXPECT_NE(first, second);
+}
+
+TEST(Random, OneInstanceMayBeUsedConcurrently)
+{
+    mw::Crypto crypto;
+    constexpr size_t TASK_COUNT = 8;
+    std::vector<std::future<bool>> results;
+    for(size_t task = 0; task < TASK_COUNT; ++task)
+    {
+        results.push_back(std::async(
+            std::launch::async, generateRandomRepeatedly, &crypto));
+    }
+
+    for(auto& result : results)
+    {
+        EXPECT_TRUE(result.get());
+    }
+}
+
+TEST(Random, ClearsStaleOpenSSLErrorsForAllOutcomes)
+{
+    mw::Crypto crypto;
+
+    seedOpenSSLErrorQueue();
+    ASSERT_TRUE(crypto.randomBytes(16));
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    ASSERT_TRUE(crypto.randomBytes(0));
+    expectOpenSSLErrorQueueEmpty();
+
+    seedOpenSSLErrorQueue();
+    expectError(
+        crypto.randomBytes(mw::crypto_limits::MAX_RANDOM_OUTPUT_SIZE + 1),
+        "Random output is too large");
+    expectOpenSSLErrorQueueEmpty();
 }
 
 TEST(Safety, ClearsStaleOpenSSLErrorsOnSuccessfulOperations)

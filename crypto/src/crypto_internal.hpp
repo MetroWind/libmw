@@ -5,11 +5,21 @@
 
 #include <openssl/crypto.h>
 
+#include "error.hpp"
+
 namespace mw::crypto_detail
 {
 
 /// A function used to cleanse an owned byte buffer.
 using CleanseFunction = void (*)(void*, size_t);
+
+/// A random-byte backend compatible with OpenSSL's private generator.
+using RandomBytesFunction = int (*)(unsigned char*, size_t, unsigned int);
+
+/// Generate random bytes through a supplied backend for deterministic tests.
+E<std::vector<std::byte>> generateRandomBytes(
+    size_t output_size, RandomBytesFunction random_bytes_function,
+    CleanseFunction cleanse_function = OPENSSL_cleanse);
 
 /// Owns temporary plaintext and cleanses its entire allocation on destruction.
 class PlaintextBuffer

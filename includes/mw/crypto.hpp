@@ -231,6 +231,13 @@ public:
     /// an error if generation fails.
     virtual E<KeyPair> generateKeyPair(KeyType type) = 0;
 
+    /// Generate exactly `output_size` cryptographically secure random bytes.
+    ///
+    /// A zero size returns an empty vector. Requests larger than
+    /// `crypto_limits::MAX_RANDOM_OUTPUT_SIZE` return an error.
+    virtual E<std::vector<std::byte>> randomBytes(
+        std::size_t output_size) = 0;
+
     /// @brief Encrypts the provided content using symmetric encryption.
     ///
     /// The resulting ciphertext for AES_256_GCM is formatted as:
@@ -293,6 +300,10 @@ public:
                                        const std::string& data) override;
 
     E<KeyPair> generateKeyPair(KeyType type) override;
+
+    /// Generate exactly `output_size` cryptographically secure random bytes.
+    E<std::vector<std::byte>> randomBytes(
+        std::size_t output_size) override;
 
     E<std::string> encrypt(EncryptionAlgorithm algo, const std::string& key,
                            const std::string& clear_content) override;

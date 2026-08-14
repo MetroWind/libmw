@@ -78,8 +78,7 @@ rebuild before using this version, although existing source remains compatible.
 
 - [x] Define maximum accepted sizes for PEM input, plaintext, ciphertext,
   random output, and derived-key output. The limits are exposed through
-  `mw::crypto_limits`; random output is defined now and will be enforced when
-  the P1 random-byte operation is added.
+  `mw::crypto_limits`, including the enforced random-output limit.
 - [x] Validate every conversion from `size_t` to an OpenSSL `int` parameter.
 - [x] Reject excessive allocations and invalid parameter combinations before
   calling OpenSSL.
@@ -88,23 +87,30 @@ rebuild before using this version, although existing source remains compatible.
 
 ## P1: Secure Random Generation
 
-- [ ] Add a public operation that returns a requested number of
+- [x] Add a public operation that returns a requested number of
   cryptographically secure random bytes.
-- [ ] Expose random generation through `CryptoInterface` so consumers can
+- [x] Expose random generation through `CryptoInterface` so consumers can
   substitute deterministic output in their own tests.
-- [ ] Use the OpenSSL private random generator for secret values where
+- [x] Use the OpenSSL private random generator for secret values where
   supported.
-- [ ] Return an error whenever the operating system or cryptographic provider
+- [x] Return an error whenever the operating system or cryptographic provider
   cannot provide secure randomness.
-- [ ] Never return predictable or deterministic fallback output from the
+- [x] Never return predictable or deterministic fallback output from the
   production implementation.
-- [ ] Define zero-length behavior and enforce the public maximum output size.
-- [ ] Add a narrow internal backend seam or injectable OpenSSL context so the
+- [x] Define zero-length behavior and enforce the public maximum output size.
+- [x] Add a narrow internal backend seam or injectable OpenSSL context so the
   concrete provider-failure path can be tested.
-- [ ] Add tests for output length, zero-length requests, excessive requests,
+- [x] Add tests for output length, zero-length requests, excessive requests,
   and provider failure.
-- [ ] Add a non-repetition smoke test, while documenting that it is not a
+- [x] Add a non-repetition smoke test, while documenting that it is not a
   statistical validation of the random generator.
+
+`randomBytes()` returns `std::byte` output, uses OpenSSL's private random
+generator at 256-bit strength, and splits requests into 64 KiB backend calls.
+The non-repetition test is only a smoke check, not a statistical validation of
+the generator. Adding the pure virtual operation changes the interface vtable;
+consumers must rebuild, and custom `CryptoInterface` implementations must add
+the new operation.
 
 This operation will be used for authorization codes, access and refresh
 tokens, sessions, setup credentials, `state`, `nonce`, PKCE verifiers,
