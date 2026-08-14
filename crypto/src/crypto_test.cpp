@@ -932,6 +932,38 @@ TEST(Signature, RejectsMalformedPEMAndPublicSigningKeys)
                                p256_material.public_key, "wrong curve"));
 }
 
+TEST(ResourceLimits, EnforcesPEMInputLimit)
+{
+    const auto limit = mw::crypto_limits::MAX_PEM_INPUT_SIZE;
+    ASSERT_GT(limit, 1U);
+
+    mw::Crypto crypto;
+    const std::string below_limit(limit - 1, 'x');
+    const std::string at_limit(limit, 'x');
+    const std::string above_limit(limit + 1, 'x');
+
+    expectError(crypto.sign(mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+                            below_limit, "data"),
+                "Failed to load private key");
+    expectError(crypto.sign(mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+                            at_limit, "data"),
+                "Failed to load private key");
+    expectError(crypto.sign(mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+                            above_limit, "data"),
+                "PEM key is too large");
+
+    expectError(crypto.verifySignature(mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+                                       below_limit, {}, "data"),
+                "Failed to load public key");
+    expectError(crypto.verifySignature(mw::SignatureAlgorithm::RSA_V1_5_SHA256,
+                                       at_limit, {}, "data"),
+                "Failed to load public key");
+    expectError(crypto.verifySignature(
+                    mw::SignatureAlgorithm::RSA_V1_5_SHA256, above_limit, {},
+                    "data"),
+                "PEM key is too large");
+}
+
 TEST(Signature, RejectsUnknownSignatureAlgorithm)
 {
     constexpr auto unknown =
@@ -1020,6 +1052,48 @@ TEST(Encryption, RejectsUnknownEncryptionAlgorithm)
                 "Unsupported encryption algorithm");
     expectError(crypto.decrypt(unknown, key, ciphertext),
                 "Unsupported encryption algorithm");
+}
+
+TEST(ResourceLimits, EnforcesEncryptionInputLimits)
+{
+    mw::Crypto crypto;
+    const std::string key(32, 'k');
+    const auto plaintext_limit = mw::crypto_limits::MAX_PLAINTEXT_SIZE;
+    const auto ciphertext_limit = mw::crypto_limits::MAX_CIPHERTEXT_SIZE;
+
+    const std::string below_limit(plaintext_limit - 1, 'p');
+    ASSIGN_OR_FAIL(auto below_ciphertext,
+                   crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                                  below_limit));
+    EXPECT_EQ(below_ciphertext.size(), ciphertext_limit - 1);
+
+    const std::string at_limit(plaintext_limit, 'p');
+    ASSIGN_OR_FAIL(auto at_limit_ciphertext,
+                   crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                                  at_limit));
+    EXPECT_EQ(at_limit_ciphertext.size(), ciphertext_limit);
+
+    const std::string above_limit(plaintext_limit + 1, 'p');
+    expectError(crypto.encrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                               above_limit),
+                "Plaintext is too large");
+
+    ASSIGN_OR_FAIL(auto decrypted,
+                   crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                                  at_limit_ciphertext));
+    EXPECT_EQ(decrypted.size(), plaintext_limit);
+
+    auto below_ciphertext_limit = at_limit_ciphertext;
+    below_ciphertext_limit.pop_back();
+    expectError(crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                               below_ciphertext_limit),
+                "Ciphertext authentication failed");
+
+    auto above_ciphertext_limit = at_limit_ciphertext;
+    above_ciphertext_limit.push_back('x');
+    expectError(crypto.decrypt(mw::EncryptionAlgorithm::AES_256_GCM, key,
+                               above_ciphertext_limit),
+                "Ciphertext is too large");
 }
 
 TEST(Signature, RejectsUnknownKeyType)
@@ -1111,6 +1185,45 @@ TEST(KDF, Argon2idVariableLength)
 
     EXPECT_NE(std::vector<unsigned char>(key64.begin(), key64.begin() + 16),
               key16);
+}
+
+TEST(ResourceLimits, EnforcesDerivedKeyOutputLimit)
+{
+    mw::Crypto crypto;
+    const auto key_limit = mw::crypto_limits::MAX_DERIVED_KEY_SIZE;
+
+    ASSIGN_OR_FAIL(auto below_limit, crypto.deriveKeyArgon2id(
+                                        "password", "somesalt12345678", 2,
+                                        4096, 1, key_limit - 1));
+    EXPECT_EQ(below_limit.size(), key_limit - 1);
+
+    ASSIGN_OR_FAIL(auto at_limit, crypto.deriveKeyArgon2id(
+                                     "password", "somesalt12345678", 2,
+                                     4096, 1, key_limit));
+    EXPECT_EQ(at_limit.size(), key_limit);
+
+    expectError(crypto.deriveKeyArgon2id(
+                    "password", "somesalt12345678", 2, 4096, 1,
+                    key_limit + 1),
+                "Derived key is too large");
+}
+
+TEST(ResourceLimits, RejectsInvalidArgon2idParameters)
+{
+    mw::Crypto crypto;
+
+    expectError(crypto.deriveKeyArgon2id("password", "somesalt12345678", 0,
+                                         4096, 1, 32),
+                "Invalid Argon2id parameters");
+    expectError(crypto.deriveKeyArgon2id("password", "somesalt12345678", 2,
+                                         0, 1, 32),
+                "Invalid Argon2id parameters");
+    expectError(crypto.deriveKeyArgon2id("password", "somesalt12345678", 2,
+                                         4096, 0, 32),
+                "Invalid Argon2id parameters");
+    expectError(crypto.deriveKeyArgon2id("password", "somesalt12345678", 2,
+                                         7, 1, 32),
+                "Invalid Argon2id parameters");
 }
 
 TEST(Safety, ClearsStaleOpenSSLErrorsOnSuccessfulOperations)

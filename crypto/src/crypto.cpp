@@ -45,6 +45,7 @@ constexpr size_t GCM_IV_LEN = 12;
 constexpr size_t GCM_TAG_LEN = 16;
 constexpr size_t AES_256_KEY_LEN = 32;
 constexpr int MIN_RSA_BITS = 2048;
+constexpr size_t ARGON2_MIN_MEMORY_PER_LANE_KB = 8;
 
 constexpr std::string_view HASH_CONTEXT_FAILURE =
     "Failed to create hash context";
@@ -77,6 +78,15 @@ constexpr std::string_view PRIVATE_KEY_SERIALIZATION_FAILURE =
 constexpr std::string_view RANDOM_IV_FAILURE = "Failed to generate random IV";
 constexpr std::string_view ENCRYPTION_FAILURE = "Encryption failed";
 constexpr std::string_view DECRYPTION_FAILURE = "Decryption failed";
+constexpr std::string_view PEM_SIZE_FAILURE = "PEM key is too large";
+constexpr std::string_view PLAINTEXT_SIZE_FAILURE =
+    "Plaintext is too large";
+constexpr std::string_view CIPHERTEXT_SIZE_FAILURE =
+    "Ciphertext is too large";
+constexpr std::string_view DERIVED_KEY_SIZE_FAILURE =
+    "Derived key is too large";
+constexpr std::string_view INVALID_ARGON2ID_PARAMETERS =
+    "Invalid Argon2id parameters";
 constexpr std::string_view AUTHENTICATION_FAILURE =
     "Ciphertext authentication failed";
 constexpr std::string_view ARGON2ID_UNAVAILABLE = "Argon2id is unavailable";
@@ -223,6 +233,10 @@ E<EVP_PKEY_ptr> createHMACKey(const std::string& key)
 
 E<EVP_PKEY_ptr> loadPublicKeyPEM(const std::string& key)
 {
+    if(key.size() > crypto_limits::MAX_PEM_INPUT_SIZE)
+    {
+        return std::unexpected(openSSLFailure(PEM_SIZE_FAILURE));
+    }
     if(!fitsOpenSSLInt(key.size()))
     {
         return std::unexpected(openSSLFailure(PUBLIC_KEY_FAILURE));
@@ -247,6 +261,10 @@ E<EVP_PKEY_ptr> loadPublicKeyPEM(const std::string& key)
 
 E<EVP_PKEY_ptr> loadPrivateKeyPEM(const std::string& key)
 {
+    if(key.size() > crypto_limits::MAX_PEM_INPUT_SIZE)
+    {
+        return std::unexpected(openSSLFailure(PEM_SIZE_FAILURE));
+    }
     if(!fitsOpenSSLInt(key.size()))
     {
         return std::unexpected(openSSLFailure(PRIVATE_KEY_FAILURE));
@@ -867,6 +885,10 @@ E<std::string> Crypto::encrypt(EncryptionAlgorithm algo, const std::string& key,
         return std::unexpected(runtimeError("Invalid key length for AES-256"));
     }
 
+    if(clear_content.size() > crypto_limits::MAX_PLAINTEXT_SIZE)
+    {
+        return std::unexpected(openSSLFailure(PLAINTEXT_SIZE_FAILURE));
+    }
     if(!fitsOpenSSLInt(clear_content.size()) ||
        clear_content.size() >
            std::numeric_limits<size_t>::max() - EVP_MAX_BLOCK_LENGTH)
@@ -955,6 +977,10 @@ E<std::string> Crypto::decrypt(EncryptionAlgorithm algo, const std::string& key,
         return std::unexpected(runtimeError("Invalid key length for AES-256"));
     }
 
+    if(encrypted_content.size() > crypto_limits::MAX_CIPHERTEXT_SIZE)
+    {
+        return std::unexpected(openSSLFailure(CIPHERTEXT_SIZE_FAILURE));
+    }
     if (encrypted_content.size() < GCM_IV_LEN + GCM_TAG_LEN)
     {
         return std::unexpected(runtimeError("Ciphertext too short"));
@@ -1033,6 +1059,17 @@ E<std::vector<unsigned char>> Crypto::deriveKeyArgon2id(
     uint32_t memory_kb, uint32_t parallelism, size_t key_length)
 {
     OpenSSLErrorBoundary error_boundary;
+
+    if(key_length > crypto_limits::MAX_DERIVED_KEY_SIZE)
+    {
+        return std::unexpected(openSSLFailure(DERIVED_KEY_SIZE_FAILURE));
+    }
+    if(iterations == 0 || memory_kb == 0 || parallelism == 0 ||
+       memory_kb / parallelism < ARGON2_MIN_MEMORY_PER_LANE_KB)
+    {
+        return std::unexpected(
+            openSSLFailure(INVALID_ARGON2ID_PARAMETERS));
+    }
 
     EVP_KDF_ptr kdf(EVP_KDF_fetch(nullptr, "ARGON2ID", nullptr), EVP_KDF_free);
     if(!kdf)

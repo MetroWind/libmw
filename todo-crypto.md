@@ -76,12 +76,15 @@ rebuild before using this version, although existing source remains compatible.
 
 ### Input and Resource Limits
 
-- [ ] Define maximum accepted sizes for PEM input, plaintext, ciphertext,
-  random output, and derived-key output.
-- [ ] Validate every conversion from `size_t` to an OpenSSL `int` parameter.
-- [ ] Reject excessive allocations and invalid parameter combinations before
+- [x] Define maximum accepted sizes for PEM input, plaintext, ciphertext,
+  random output, and derived-key output. The limits are exposed through
+  `mw::crypto_limits`; random output is defined now and will be enforced when
+  the P1 random-byte operation is added.
+- [x] Validate every conversion from `size_t` to an OpenSSL `int` parameter.
+- [x] Reject excessive allocations and invalid parameter combinations before
   calling OpenSSL.
-- [ ] Add boundary tests at, below, and above every public size limit.
+- [x] Add boundary tests at, below, and above every currently implemented
+  public size limit.
 
 ## P1: Secure Random Generation
 

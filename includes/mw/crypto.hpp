@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -7,6 +8,30 @@
 
 namespace mw
 {
+
+/// Resource limits enforced by the concrete crypto implementation.
+namespace crypto_limits
+{
+
+/// Maximum size of a PEM-encoded key accepted by asymmetric operations.
+inline constexpr std::size_t MAX_PEM_INPUT_SIZE = std::size_t{64} * 1024;
+
+/// Maximum plaintext size accepted by authenticated encryption.
+inline constexpr std::size_t MAX_PLAINTEXT_SIZE =
+    std::size_t{16} * 1024 * 1024;
+
+/// Maximum size of the current AES-GCM ciphertext envelope.
+inline constexpr std::size_t MAX_CIPHERTEXT_SIZE =
+    MAX_PLAINTEXT_SIZE + 12 + 16;
+
+/// Maximum number of bytes permitted for secure random output.
+inline constexpr std::size_t MAX_RANDOM_OUTPUT_SIZE =
+    std::size_t{1} * 1024 * 1024;
+
+/// Maximum number of bytes returned by a key-derivation operation.
+inline constexpr std::size_t MAX_DERIVED_KEY_SIZE = std::size_t{64} * 1024;
+
+} // namespace crypto_limits
 
 /// An interface for crypto hashes.
 class HasherInterface
@@ -170,6 +195,8 @@ public:
     /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
     /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
     /// requires an Ed25519 public key.
+    /// Asymmetric PEM keys are limited to
+    /// `crypto_limits::MAX_PEM_INPUT_SIZE` bytes.
     /// Public errors do not contain caller-supplied key, signature, or data
     /// bytes.
     virtual E<bool> verifySignature(
@@ -190,6 +217,8 @@ public:
     /// bits. RSA v1.5 accepts general RSA keys of at least 2,048 bits. ECDSA
     /// requires P-256 or P-384 as named by the selected algorithm, and Ed25519
     /// requires an Ed25519 private key.
+    /// Asymmetric PEM keys are limited to
+    /// `crypto_limits::MAX_PEM_INPUT_SIZE` bytes.
     /// Public errors do not contain caller-supplied key or data bytes.
     virtual E<std::vector<unsigned char>> sign(SignatureAlgorithm algo,
                                                const std::string& key,
@@ -210,6 +239,7 @@ public:
     /// @param algo The symmetric encryption algorithm to use.
     /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
     /// @param clear_content The plaintext data to encrypt.
+    /// The plaintext is limited to `crypto_limits::MAX_PLAINTEXT_SIZE` bytes.
     /// @return The encrypted ciphertext, or an error if encryption failed.
     /// Public errors do not contain the key or plaintext.
     virtual E<std::string> encrypt(EncryptionAlgorithm algo,
@@ -224,6 +254,8 @@ public:
     /// @param algo The symmetric encryption algorithm to use.
     /// @param key The symmetric key (must be 32 bytes for AES_256_GCM).
     /// @param encrypted_content The ciphertext data to decrypt.
+    /// The ciphertext envelope is limited to
+    /// `crypto_limits::MAX_CIPHERTEXT_SIZE` bytes.
     /// @return The decrypted plaintext data, or an error if decryption failed.
     /// Authentication failure returns an error and no plaintext. Candidate
     /// plaintext is cleared from libmw's temporary output buffer. Public
@@ -240,6 +272,7 @@ public:
     /// @param memory_kb Memory cost in kilobytes.
     /// @param parallelism Number of threads/lanes.
     /// @param key_length The length of the derived key in bytes.
+    /// `key_length` may not exceed `crypto_limits::MAX_DERIVED_KEY_SIZE`.
     /// @return The derived key as raw bytes, or an error if derivation failed.
     /// Public errors do not contain the password, salt, or derived key bytes.
     virtual E<std::vector<unsigned char>> deriveKeyArgon2id(
