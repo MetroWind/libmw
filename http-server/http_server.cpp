@@ -9,6 +9,8 @@
 
 #include <exception>
 #include <filesystem>
+#include <format>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <variant>
@@ -45,13 +47,21 @@ E<void> HTTPServer::start()
         {
             if(std::holds_alternative<SocketFileInfo>(listen))
             {
-                server.set_address_family(AF_UNIX).listen(
-                    std::get<SocketFileInfo>(listen).filename, 80);
+                if(!server.set_address_family(AF_UNIX).listen(
+                       std::get<SocketFileInfo>(listen).filename, 80))
+                {
+                    throw std::runtime_error(
+                        std::get<SocketFileInfo>(listen).filename);
+                }
             }
             else
             {
                 const IPSocketInfo sock = std::get<IPSocketInfo>(listen);
-                server.listen(sock.address, sock.port);
+                if(!server.listen(sock.address, sock.port))
+                {
+                    throw std::runtime_error(
+                        std::format("{}:{}", sock.address, sock.port));
+                }
             }
         }
         catch(const std::exception& e)
