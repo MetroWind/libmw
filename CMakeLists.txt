@@ -9,6 +9,10 @@ option(LIBMW_BUILD_URL "Build mw::url" OFF)
 option(LIBMW_BUILD_SQLITE "Build mw::sqlite" OFF)
 option(LIBMW_BUILD_HTTP_SERVER "Build mw::http-server" OFF)
 option(LIBMW_BUILD_CRYPTO "Build mw::crypto" OFF)
+set(LIBMW_TEST_SANITIZERS "address,undefined" CACHE STRING
+    "Core test sanitizers (empty to disable, or thread for TSan)")
+
+find_package(Threads REQUIRED)
 
 include(FetchContent)
 
@@ -58,6 +62,7 @@ set_property(TARGET mw PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
 target_compile_options(mw PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(mw PRIVATE ${INCLUDES})
 target_link_libraries(mw PRIVATE ${LIBS})
+target_link_libraries(mw PUBLIC Threads::Threads)
 
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
@@ -69,8 +74,21 @@ if(LIBMW_BUILD_TESTS)
   add_executable(mw_test ${HEADERS} ${SOURCE_FILES} ${TEST_FILES})
   set_property(TARGET mw_test PROPERTY CXX_STANDARD 23)
   set_property(TARGET mw_test PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
-  target_compile_options(mw_test PRIVATE -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g -O1 -Wno-error=maybe-uninitialized)
-  target_link_options(mw_test PRIVATE -fsanitize=address,undefined)
+  target_compile_options(mw_test PRIVATE -Wall -Wextra -Wpedantic
+    -g -O1 -Wno-error=maybe-uninitialized)
+  if(LIBMW_TEST_SANITIZERS)
+    target_compile_options(mw_test PRIVATE
+      -fsanitize=${LIBMW_TEST_SANITIZERS})
+    target_link_options(mw_test PRIVATE
+      -fsanitize=${LIBMW_TEST_SANITIZERS})
+  endif()
+  add_executable(process_test_helper src/process_test_helper.cpp)
+  set_property(TARGET process_test_helper PROPERTY CXX_STANDARD 23)
+  target_compile_options(process_test_helper PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_definitions(mw_test PRIVATE
+    LIBMW_PROCESS_TESTING
+    PROCESS_TEST_HELPER="$<TARGET_FILE:process_test_helper>")
+  add_dependencies(mw_test process_test_helper)
   target_include_directories(mw_test PRIVATE
     ${INCLUDES}
     ${googletest_SOURCE_DIR}/googletest/include
@@ -78,6 +96,7 @@ if(LIBMW_BUILD_TESTS)
   )
 
   target_link_libraries(mw_test PRIVATE
+    Threads::Threads
     ${LIBS}
     httplib
     GTest::gtest_main
@@ -87,6 +106,7 @@ if(LIBMW_BUILD_TESTS)
   enable_testing()
   include(GoogleTest)
   gtest_discover_tests(mw_test
+    PROPERTIES TIMEOUT 30
     # Need this so that the unit tests can find the templates.
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
