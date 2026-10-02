@@ -8,6 +8,7 @@
 #include <variant>      // for variant, swap, get, holds_alternative
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,15 +25,11 @@ namespace mw
 Pipe::Pipe(Pipe&& rhs)
 {
     std::swap(fds, rhs.fds);
-    std::swap(output_closed, rhs.output_closed);
-    std::swap(input_closed, rhs.input_closed);
 }
 
 Pipe& Pipe::operator=(Pipe&& rhs)
 {
     std::swap(fds, rhs.fds);
-    std::swap(output_closed, rhs.output_closed);
-    std::swap(input_closed, rhs.input_closed);
     return *this;
 }
 
@@ -41,8 +38,15 @@ E<Pipe> Pipe::create()
     Pipe result;
     if(pipe(result.fds.data()) == 0)
     {
-        result.output_closed = false;
-        result.input_closed = false;
+        for(int fd: result.fds)
+        {
+            if(fcntl(fd, F_SETFD, FD_CLOEXEC) == -1)
+            {
+                return std::unexpected(runtimeError(
+                    std::string("Failed to set pipe close-on-exec: ") +
+                    strerror(errno)));
+            }
+        }
         return E<Pipe>{std::in_place, std::move(result)};
     }
     else
@@ -53,21 +57,19 @@ E<Pipe> Pipe::create()
 
 Pipe::~Pipe()
 {
-    if(!input_closed)
-    {
-        std::ignore = closeInput();
-    }
-    if(!output_closed)
-    {
-        std::ignore = closeOutput();
-    }
+    std::ignore = closeInput();
+    std::ignore = closeOutput();
 }
 
 E<void> Pipe::closeInput()
 {
+    if(inputFD() == -1)
+    {
+        return {};
+    }
     if(close(inputFD()) == 0)
     {
-        input_closed = true;
+        fds[1] = -1;
         return {};
     }
     else
@@ -80,9 +82,13 @@ E<void> Pipe::closeInput()
 
 E<void> Pipe::closeOutput()
 {
+    if(outputFD() == -1)
+    {
+        return {};
+    }
     if(close(outputFD()) == 0)
     {
-        output_closed = true;
+        fds[0] = -1;
         return {};
     }
     else

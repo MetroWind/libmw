@@ -30,6 +30,7 @@ public:
     Pipe& operator=(const Pipe&) = delete;
     Pipe& operator=(Pipe&& rhs);
 
+    // Create a pipe whose ends are closed on exec unless duplicated.
     static E<Pipe> create();
 
     // This class does not keep track of duped FDs. If you have
@@ -37,7 +38,9 @@ public:
     // mean the destruction of the actual pipe.
     ~Pipe();
 
+    // Close the write end. Closing an already closed end succeeds.
     E<void> closeInput();
+    // Close the read end. Closing an already closed end succeeds.
     E<void> closeOutput();
     E<int> dupInput(int fd) const;
     E<int> dupOutput(int fd) const;
@@ -51,11 +54,9 @@ public:
 private:
     // an array that will hold two file descriptors
     std::array<int, 2> fds = {-1, -1};
-    bool output_closed = true;
-    bool input_closed = true;
 };
 
-// Doesn’t support using a pipe to connect two Processes yet.
+// A child process with optional pipes or strings for standard input/output.
 struct Process
 {
 public:
