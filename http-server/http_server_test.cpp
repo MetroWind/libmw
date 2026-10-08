@@ -28,7 +28,7 @@ protected:
 TEST(HTTPServer, CanStartServerOnSocket)
 {
     Server server(SocketFileInfo("/tmp/mwtest.socket"));
-    server.start();
+    ASSERT_TRUE(server.start().has_value());
     {
         HTTPSession client("/tmp/mwtest.socket");
         ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost/"));
@@ -42,7 +42,7 @@ TEST(HTTPServer, CanStartServerOnSocket)
 TEST(HTTPServer, CanStartServer)
 {
     Server server(IPSocketInfo{"localhost", 8123});
-    server.start();
+    ASSERT_TRUE(server.start().has_value());
     {
         HTTPSession client;
         ASSIGN_OR_FAIL(const HTTPResponse* res, client.get("http://localhost:8123/"));

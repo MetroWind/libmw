@@ -50,7 +50,6 @@ set(HEADERS
 )
 
 set(LIBS
-  httplib
   spdlog::spdlog
   mw-url
 )
@@ -68,6 +67,7 @@ set_property(TARGET mw-http-server PROPERTY COMPILE_WARNING_AS_ERROR TRUE)
 target_compile_options(mw-http-server PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(mw-http-server PUBLIC ${INCLUDES})
 target_link_libraries(mw-http-server PRIVATE ${LIBS})
+target_link_libraries(mw-http-server PUBLIC httplib)
 
 if(LIBMW_BUILD_TESTS)
   set(TEST_FILES
