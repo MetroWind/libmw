@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "error.hpp"
@@ -33,6 +35,27 @@ inline constexpr std::size_t MAX_RANDOM_OUTPUT_SIZE =
 inline constexpr std::size_t MAX_DERIVED_KEY_SIZE = std::size_t{64} * 1024;
 
 } // namespace crypto_limits
+
+/// A single incremental hash operation.
+///
+/// Feed chunks in order, then finalize once. Finalization or a backend error
+/// closes the operation; further calls return an error. An empty operation
+/// hashes the empty input. Calls on the same operation must be serialized.
+class IncrementalHasherInterface
+{
+public:
+    /// Release the operation's digest context.
+    virtual ~IncrementalHasherInterface() = default;
+
+    /// Append raw bytes, including embedded nulls. Empty chunks are allowed.
+    virtual E<void> update(std::string_view bytes) = 0;
+
+    /// Close the operation and return the raw digest.
+    virtual E<std::vector<unsigned char>> finalizeToBytes() = 0;
+
+    /// Close the operation and return the digest as lowercase hex.
+    virtual E<std::string> finalizeToHexStr();
+};
 
 /// An interface for crypto hashes.
 class HasherInterface
@@ -129,6 +152,75 @@ public:
 
 private:
     SHA256Hasher full_hasher;
+};
+
+/// An incremental hasher for SHA-256.
+///
+/// Backend initialization occurs on the first update or finalization and
+/// reports errors through E<>. Each instance owns one independent operation.
+class SHA256IncrementalHasher : public IncrementalHasherInterface
+{
+public:
+    /// Construct an empty incremental hash operation.
+    SHA256IncrementalHasher();
+
+    /// Release the operation's digest context.
+    ~SHA256IncrementalHasher() override = default;
+
+    /// Append raw bytes to this operation.
+    E<void> update(std::string_view bytes) override;
+
+    /// Close the operation and return its raw digest.
+    E<std::vector<unsigned char>> finalizeToBytes() override;
+
+private:
+    std::unique_ptr<IncrementalHasherInterface> operation;
+};
+
+/// An incremental hasher for SHA-512.
+///
+/// Backend initialization occurs on the first update or finalization and
+/// reports errors through E<>. Each instance owns one independent operation.
+class SHA512IncrementalHasher : public IncrementalHasherInterface
+{
+public:
+    /// Construct an empty incremental hash operation.
+    SHA512IncrementalHasher();
+
+    /// Release the operation's digest context.
+    ~SHA512IncrementalHasher() override = default;
+
+    /// Append raw bytes to this operation.
+    E<void> update(std::string_view bytes) override;
+
+    /// Close the operation and return its raw digest.
+    E<std::vector<unsigned char>> finalizeToBytes() override;
+
+private:
+    std::unique_ptr<IncrementalHasherInterface> operation;
+};
+
+/// An incremental hasher for the first half of SHA-256.
+///
+/// Backend initialization occurs on the first update or finalization and
+/// reports errors through E<>. Each instance owns one independent operation.
+class SHA256HalfIncrementalHasher : public IncrementalHasherInterface
+{
+public:
+    /// Construct an empty incremental hash operation.
+    SHA256HalfIncrementalHasher();
+
+    /// Release the operation's digest context.
+    ~SHA256HalfIncrementalHasher() override = default;
+
+    /// Append raw bytes to this operation.
+    E<void> update(std::string_view bytes) override;
+
+    /// Close the operation and return its raw digest.
+    E<std::vector<unsigned char>> finalizeToBytes() override;
+
+private:
+    std::unique_ptr<IncrementalHasherInterface> operation;
 };
 
 enum class SignatureAlgorithm

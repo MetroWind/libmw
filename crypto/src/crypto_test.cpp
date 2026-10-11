@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -500,6 +501,115 @@ TEST(Hash, CanHashSHA512)
               "d6f644b19812e97b5d871658d6d3400ecd4787faeb9b8990c1e7608288664be7"
               "7257104a58d033bcf1a0e0945ff06468ebe53e2dff36e248424c7273117d"
               "ac09");
+}
+
+template<typename T>
+class IncrementalHash : public testing::Test
+{};
+
+using IncrementalHashTypes = testing::Types<
+    std::pair<mw::SHA256Hasher, mw::SHA256IncrementalHasher>,
+    std::pair<mw::SHA512Hasher, mw::SHA512IncrementalHasher>,
+    std::pair<mw::SHA256HalfHasher, mw::SHA256HalfIncrementalHasher>>;
+TYPED_TEST_SUITE(IncrementalHash, IncrementalHashTypes);
+
+TYPED_TEST(IncrementalHash, ChunksMatchOneShotForBinaryInput)
+{
+    const typename TypeParam::first_type hasher;
+    const mw::HasherInterface& interface = hasher;
+    std::string input;
+    for(size_t i = 0; i < 4097; ++i)
+    {
+        input.push_back(static_cast<char>(i % 256));
+    }
+    ASSIGN_OR_FAIL(auto expected, interface.hashToBytes(input));
+    for(size_t chunk_size : {1, 63, 64, 65, 127, 128, 129, 1024})
+    {
+        SCOPED_TRACE(chunk_size);
+        typename TypeParam::second_type operation;
+        ASSERT_TRUE(mw::isExpected(operation.update({})));
+        for(size_t offset = 0; offset < input.size(); offset += chunk_size)
+        {
+            ASSERT_TRUE(mw::isExpected(operation.update(
+                std::string_view(input).substr(offset, chunk_size))));
+        }
+        ASSERT_TRUE(mw::isExpected(operation.update({})));
+        ASSIGN_OR_FAIL(auto digest, operation.finalizeToBytes());
+        EXPECT_EQ(digest, expected);
+    }
+}
+
+TYPED_TEST(IncrementalHash, EmptyInputAndFinalizationCloseOperation)
+{
+    const typename TypeParam::first_type hasher;
+    ASSIGN_OR_FAIL(auto expected, hasher.hashToHexStr(""));
+    typename TypeParam::second_type operation;
+    ASSIGN_OR_FAIL(auto digest, operation.finalizeToHexStr());
+    EXPECT_EQ(digest, expected);
+    EXPECT_FALSE(operation.update("later"));
+    EXPECT_FALSE(operation.update({}));
+    EXPECT_FALSE(operation.finalizeToBytes());
+    EXPECT_FALSE(operation.finalizeToHexStr());
+
+    typename TypeParam::second_type second;
+    ASSERT_TRUE(mw::isExpected(second.update({})));
+    ASSIGN_OR_FAIL(auto bytes, second.finalizeToBytes());
+    ASSIGN_OR_FAIL(auto empty_bytes, hasher.hashToBytes(""));
+    EXPECT_EQ(bytes, empty_bytes);
+    EXPECT_FALSE(second.update("later"));
+    EXPECT_FALSE(second.finalizeToBytes());
+}
+
+TYPED_TEST(IncrementalHash, OperationsAreIndependent)
+{
+    const typename TypeParam::first_type hasher;
+    typename TypeParam::second_type first;
+    typename TypeParam::second_type second;
+    ASSERT_TRUE(mw::isExpected(first.update("a")));
+    ASSERT_TRUE(mw::isExpected(second.update("other")));
+    ASSIGN_OR_FAIL(auto expected_first, hasher.hashToHexStr("abc"));
+    ASSIGN_OR_FAIL(auto expected_second, hasher.hashToBytes("other"));
+    ASSERT_TRUE(mw::isExpected(first.update("bc")));
+    ASSIGN_OR_FAIL(auto second_digest, second.finalizeToBytes());
+    ASSIGN_OR_FAIL(auto first_digest, first.finalizeToHexStr());
+    EXPECT_EQ(first_digest, expected_first);
+    EXPECT_EQ(second_digest, expected_second);
+}
+
+TYPED_TEST(IncrementalHash, ClearsOpenSSLErrorQueue)
+{
+    typename TypeParam::second_type operation;
+    seedOpenSSLErrorQueue();
+    ASSERT_TRUE(mw::isExpected(operation.update("abc")));
+    expectOpenSSLErrorQueueEmpty();
+    seedOpenSSLErrorQueue();
+    ASSIGN_OR_FAIL(auto digest, operation.finalizeToBytes());
+    EXPECT_FALSE(digest.empty());
+    expectOpenSSLErrorQueueEmpty();
+    seedOpenSSLErrorQueue();
+    EXPECT_FALSE(operation.update("closed"));
+    expectOpenSSLErrorQueueEmpty();
+    seedOpenSSLErrorQueue();
+    EXPECT_FALSE(operation.finalizeToHexStr());
+    expectOpenSSLErrorQueueEmpty();
+}
+
+TEST(Hash, IncrementalMockSupportsHexConversion)
+{
+    auto operation = std::make_unique<mw::IncrementalHasherMock>();
+    auto* operation_ptr = operation.get();
+    EXPECT_CALL(*operation_ptr, update("abc"))
+        .WillOnce(Return(mw::E<void>{}));
+    EXPECT_CALL(*operation_ptr, finalizeToBytes())
+        .WillOnce(Return(std::vector<unsigned char>{0x00, 0xAB, 0xFF}))
+        .WillOnce(Return(std::unexpected(mw::runtimeError("test failure"))));
+    mw::IncrementalHasherInterface* session = operation.get();
+    ASSERT_TRUE(mw::isExpected(session->update("abc")));
+    ASSIGN_OR_FAIL(auto hex, session->finalizeToHexStr());
+    EXPECT_EQ(hex, "00abff");
+    auto failure = session->finalizeToHexStr();
+    ASSERT_FALSE(failure);
+    EXPECT_EQ(mw::errorMsg(failure.error()), "test failure");
 }
 
 TEST(Hash, InstancesMayBeUsedConcurrently)

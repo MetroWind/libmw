@@ -158,41 +158,117 @@ struct SignatureProfile
     bool use_pss;
 };
 
+std::string digestToHex(const std::vector<unsigned char>& digest)
+{
+    std::stringstream ss;
+    for(auto byte : digest)
+    {
+        ss << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<int>(byte);
+    }
+    return ss.str();
+}
+
+class OpenSSLIncrementalHasher : public IncrementalHasherInterface
+{
+public:
+    /// Prepare an operation, deferring backend initialization until use.
+    OpenSSLIncrementalHasher(const EVP_MD* digest, bool half)
+        : digest(digest), half(half)
+    {}
+
+    /// Append bytes to the operation, closing it if the backend fails.
+    E<void> update(std::string_view bytes) override
+    {
+        OpenSSLErrorBoundary error_boundary;
+        if(auto result = initialize(); !result)
+        {
+            return result;
+        }
+        if(!bytes.empty() &&
+           EVP_DigestUpdate(context.get(), bytes.data(), bytes.size()) <= 0)
+        {
+            context.reset();
+            closed = true;
+            return std::unexpected(openSSLFailure(HASH_UPDATE_FAILURE));
+        }
+        return {};
+    }
+
+    /// Finalize once, truncating the digest when requested by the hasher.
+    E<std::vector<unsigned char>> finalizeToBytes() override
+    {
+        OpenSSLErrorBoundary error_boundary;
+        if(auto result = initialize(); !result)
+        {
+            return std::unexpected(result.error());
+        }
+        closed = true;
+        auto final_context = std::move(context);
+        std::vector<unsigned char> result(digest_size);
+        unsigned int hash_length = 0;
+        if(EVP_DigestFinal_ex(final_context.get(), result.data(),
+                              &hash_length) <= 0 ||
+           static_cast<size_t>(hash_length) != digest_size)
+        {
+            return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
+        }
+        result.resize(output_size);
+        return result;
+    }
+
+private:
+    E<void> initialize()
+    {
+        if(closed)
+        {
+            return std::unexpected(runtimeError("Hash operation is closed"));
+        }
+        if(context)
+        {
+            return {};
+        }
+        closed = true;
+        EVP_MD_CTX_ptr new_context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+        if(!new_context)
+        {
+            return std::unexpected(openSSLFailure(HASH_CONTEXT_FAILURE));
+        }
+        if(EVP_DigestInit_ex(new_context.get(), digest, nullptr) <= 0)
+        {
+            return std::unexpected(
+                openSSLFailure(HASH_INITIALIZATION_FAILURE));
+        }
+        const int size = EVP_MD_get_size(digest);
+        if(size <= 0)
+        {
+            return std::unexpected(
+                openSSLFailure(HASH_INITIALIZATION_FAILURE));
+        }
+        digest_size = static_cast<size_t>(size);
+        output_size = half ? digest_size / 2 : digest_size;
+        context = std::move(new_context);
+        closed = false;
+        return {};
+    }
+
+    const EVP_MD* digest;
+    bool half;
+    bool closed = false;
+    EVP_MD_CTX_ptr context{nullptr, EVP_MD_CTX_free};
+    size_t digest_size = 0;
+    size_t output_size = 0;
+};
+
 E<std::vector<unsigned char>> hash(const EVP_MD* digest,
                                   const std::string& bytes)
 {
-    EVP_MD_CTX_ptr ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if(!ctx)
+    OpenSSLIncrementalHasher operation(digest, false);
+    if(auto result = operation.update(bytes); !result)
     {
-        return std::unexpected(openSSLFailure(HASH_CONTEXT_FAILURE));
+        return std::unexpected(result.error());
     }
-    if(EVP_DigestInit_ex(ctx.get(), digest, nullptr) <= 0)
-    {
-        return std::unexpected(openSSLFailure(HASH_INITIALIZATION_FAILURE));
-    }
-    if(EVP_DigestUpdate(ctx.get(), bytes.data(), bytes.size()) <= 0)
-    {
-        return std::unexpected(openSSLFailure(HASH_UPDATE_FAILURE));
-    }
-
-    const int digest_size = EVP_MD_get_size(digest);
-    if(digest_size <= 0)
-    {
-        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
-    }
-
-    std::vector<unsigned char> result(static_cast<size_t>(digest_size));
-    unsigned int hash_length = 0;
-    if(EVP_DigestFinal_ex(ctx.get(), result.data(), &hash_length) <= 0)
-    {
-        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
-    }
-    if(hash_length == 0 || static_cast<size_t>(hash_length) > result.size())
-    {
-        return std::unexpected(openSSLFailure(HASH_FINALIZATION_FAILURE));
-    }
-    result.resize(hash_length);
-    return result;
+    return operation.finalizeToBytes();
 }
 
 E<SignatureProfile> signatureProfile(SignatureAlgorithm algo)
@@ -705,17 +781,63 @@ E<std::vector<std::byte>> crypto_detail::generateRandomBytes(
     return output;
 }
 
+E<std::string> IncrementalHasherInterface::finalizeToHexStr()
+{
+    OpenSSLErrorBoundary error_boundary;
+    ASSIGN_OR_RETURN(auto digest, finalizeToBytes());
+    return digestToHex(digest);
+}
+
 E<std::string> HasherInterface::hashToHexStr(const std::string& bytes) const
 {
     OpenSSLErrorBoundary error_boundary;
-    ASSIGN_OR_RETURN(auto hash, this->hashToBytes(bytes));
-    std::stringstream ss;
-    for(auto byte : hash)
-    {
-        ss << std::hex << std::setw(2) << std::setfill('0')
-           << static_cast<int>(byte);
-    }
-    return ss.str();
+    ASSIGN_OR_RETURN(auto digest, hashToBytes(bytes));
+    return digestToHex(digest);
+}
+
+SHA256IncrementalHasher::SHA256IncrementalHasher()
+    : operation(std::make_unique<OpenSSLIncrementalHasher>(
+          EVP_sha256(), false))
+{}
+
+E<void> SHA256IncrementalHasher::update(std::string_view bytes)
+{
+    return operation->update(bytes);
+}
+
+E<std::vector<unsigned char>> SHA256IncrementalHasher::finalizeToBytes()
+{
+    return operation->finalizeToBytes();
+}
+
+SHA512IncrementalHasher::SHA512IncrementalHasher()
+    : operation(std::make_unique<OpenSSLIncrementalHasher>(
+          EVP_sha512(), false))
+{}
+
+E<void> SHA512IncrementalHasher::update(std::string_view bytes)
+{
+    return operation->update(bytes);
+}
+
+E<std::vector<unsigned char>> SHA512IncrementalHasher::finalizeToBytes()
+{
+    return operation->finalizeToBytes();
+}
+
+SHA256HalfIncrementalHasher::SHA256HalfIncrementalHasher()
+    : operation(std::make_unique<OpenSSLIncrementalHasher>(
+          EVP_sha256(), true))
+{}
+
+E<void> SHA256HalfIncrementalHasher::update(std::string_view bytes)
+{
+    return operation->update(bytes);
+}
+
+E<std::vector<unsigned char>> SHA256HalfIncrementalHasher::finalizeToBytes()
+{
+    return operation->finalizeToBytes();
 }
 
 E<std::vector<unsigned char>> SHA256Hasher::hashToBytes(

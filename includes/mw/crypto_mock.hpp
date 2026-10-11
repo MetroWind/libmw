@@ -9,6 +9,21 @@
 namespace mw
 {
 
+/// Mock a single incremental hash operation.
+class IncrementalHasherMock : public IncrementalHasherInterface
+{
+public:
+    /// Release the mocked operation.
+    ~IncrementalHasherMock() override = default;
+
+    /// Mock appending a chunk of raw bytes.
+    MOCK_METHOD(E<void>, update, (std::string_view bytes), (override));
+
+    /// Mock closing the operation and returning its raw digest.
+    MOCK_METHOD(E<std::vector<unsigned char>>, finalizeToBytes, (),
+                (override));
+};
+
 class HasherMock : public HasherInterface
 {
 public:
